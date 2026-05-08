@@ -33,12 +33,24 @@ final class MenuBarPanelManager: NSObject {
     private var dismissPanelObserver: NSObjectProtocol?
     private var showPanelObserver: NSObjectProtocol?
 
+    /// Settings popover anchored under the gear footer button.
+    private var settingsPopoverPanel: NSPanel?
+    private var settingsPopoverClickOutsideMonitor: Any?
+
+    /// Notes lives in its own draggable, persistent NSWindow rather than a
+    /// popover — closing the menu-bar panel does not close Notes.
+    private let notesWindowController: NotesWindowController
+
     private let companionManager: CompanionManager
     private let panelWidth: CGFloat = 320
-    private let panelHeight: CGFloat = 380
+    /// Tall enough for the new cursor-color picker row plus the existing
+    /// permissions/onboarding states. The panel wraps to fittingSize when
+    /// shown, so this is just the initial frame.
+    private let panelHeight: CGFloat = 460
 
     init(companionManager: CompanionManager) {
         self.companionManager = companionManager
+        self.notesWindowController = NotesWindowController(companionManager: companionManager)
         super.init()
         createStatusItem()
 
@@ -158,10 +170,22 @@ final class MenuBarPanelManager: NSObject {
     private func hidePanel() {
         panel?.orderOut(nil)
         removeClickOutsideMonitor()
+        // Settings is a transient popover — close it whenever the main panel
+        // goes away. The Notes window stays open by design (it's a real
+        // standalone window the user might be referencing).
+        hideSettingsPopover()
     }
 
     private func createPanel() {
-        let companionPanelView = CompanionPanelView(companionManager: companionManager)
+        let companionPanelView = CompanionPanelView(
+            companionManager: companionManager,
+            onShowNotesPanel: { [weak self] in
+                self?.notesWindowController.show()
+            },
+            onShowSettingsPanel: { [weak self] in
+                self?.showSettingsPopover()
+            }
+        )
             .frame(width: panelWidth)
 
         let hostingView = NSHostingView(rootView: companionPanelView)
@@ -255,6 +279,122 @@ final class MenuBarPanelManager: NSObject {
         if let monitor = clickOutsideMonitor {
             NSEvent.removeMonitor(monitor)
             clickOutsideMonitor = nil
+        }
+    }
+
+    // MARK: - Settings Popover
+
+    /// Spawns the settings popover anchored next to the main companion panel.
+    /// Notes lives in its own draggable NSWindow (see `notesWindowController`)
+    /// so it survives panel dismissal.
+    fileprivate func showSettingsPopover() {
+        if settingsPopoverPanel != nil {
+            hideSettingsPopover()
+            return
+        }
+
+        let settingsView = SettingsPopoverView(
+            companionManager: companionManager,
+            onRequestDismiss: { [weak self] in
+                self?.hideSettingsPopover()
+            }
+        )
+
+        let popoverWidth: CGFloat = 320
+        let popoverHeight: CGFloat = 560
+        let popoverPanel = makePopoverPanel(
+            rootView: AnyView(settingsView),
+            size: CGSize(width: popoverWidth, height: popoverHeight)
+        )
+
+        positionPopover(popoverPanel)
+        popoverPanel.makeKeyAndOrderFront(nil)
+        popoverPanel.orderFrontRegardless()
+
+        settingsPopoverPanel = popoverPanel
+        installSettingsClickOutsideMonitor()
+    }
+
+    fileprivate func hideSettingsPopover() {
+        settingsPopoverPanel?.orderOut(nil)
+        settingsPopoverPanel = nil
+        if let monitor = settingsPopoverClickOutsideMonitor {
+            NSEvent.removeMonitor(monitor)
+            settingsPopoverClickOutsideMonitor = nil
+        }
+    }
+
+    private func makePopoverPanel(rootView: AnyView, size: CGSize) -> NSPanel {
+        let hostingView = NSHostingView(rootView: rootView)
+        hostingView.frame = NSRect(x: 0, y: 0, width: size.width, height: size.height)
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = .clear
+
+        let popoverPanel = KeyablePanel(
+            contentRect: NSRect(x: 0, y: 0, width: size.width, height: size.height),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        popoverPanel.isFloatingPanel = true
+        // Sit one level above the main panel so we never get hidden behind it.
+        popoverPanel.level = .popUpMenu
+        popoverPanel.isOpaque = false
+        popoverPanel.backgroundColor = .clear
+        popoverPanel.hasShadow = false
+        popoverPanel.hidesOnDeactivate = false
+        popoverPanel.isExcludedFromWindowsMenu = true
+        popoverPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        popoverPanel.contentView = hostingView
+        return popoverPanel
+    }
+
+    /// Anchors the popover to the trailing edge of the main companion panel
+    /// with a small horizontal gap so it visually pairs with the gear button.
+    private func positionPopover(_ popoverPanel: NSPanel) {
+        guard let mainPanel = panel else { return }
+
+        let popoverSize = popoverPanel.frame.size
+        let mainFrame = mainPanel.frame
+        let horizontalGap: CGFloat = 8
+
+        let originX = mainFrame.maxX + horizontalGap
+        let originY = mainFrame.maxY - popoverSize.height
+
+        let activeScreen: NSScreen? = NSScreen.screens.first { screen in
+            screen.frame.contains(NSPoint(x: mainFrame.midX, y: mainFrame.midY))
+        } ?? NSScreen.main
+        let visibleFrame: NSRect
+        if let screen = activeScreen {
+            visibleFrame = screen.visibleFrame
+        } else {
+            visibleFrame = NSRect(x: 0, y: 0, width: NSScreen.main?.frame.width ?? 0, height: NSScreen.main?.frame.height ?? 0)
+        }
+
+        let clampedX = max(visibleFrame.minX + 8, min(originX, visibleFrame.maxX - popoverSize.width - 8))
+        let clampedY = max(visibleFrame.minY + 8, min(originY, visibleFrame.maxY - popoverSize.height - 8))
+
+        popoverPanel.setFrame(
+            NSRect(x: clampedX, y: clampedY, width: popoverSize.width, height: popoverSize.height),
+            display: true
+        )
+    }
+
+    private func installSettingsClickOutsideMonitor() {
+        if let monitor = settingsPopoverClickOutsideMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+
+        settingsPopoverClickOutsideMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let popoverPanel = self.settingsPopoverPanel,
+                      popoverPanel.isVisible else { return }
+                if popoverPanel.frame.contains(NSEvent.mouseLocation) { return }
+                self.hideSettingsPopover()
+            }
         }
     }
 }

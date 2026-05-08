@@ -7,6 +7,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 private final class KeyableTextInputPanel: NSPanel {
     override var canBecomeKey: Bool { true }
@@ -24,15 +25,20 @@ final class CompanionTextInputPanelManager: NSObject {
     private var globalMouseMoveMonitor: Any?
     private var localMouseMoveMonitor: Any?
 
-    private let panelWidth: CGFloat = 300
-    private let panelHeight: CGFloat = 50
+    private let panelWidth: CGFloat = 360
+    private let panelHeight: CGFloat = 54
 
     func show(
-        onSubmit: @escaping @MainActor (String) -> Void,
+        companionManager: CompanionManager,
+        onSubmit: @escaping @MainActor (String, [Data]) -> Void,
         onCancel: @escaping @MainActor () -> Void
     ) {
         if panel == nil {
-            createPanel(onSubmit: onSubmit, onCancel: onCancel)
+            createPanel(
+                companionManager: companionManager,
+                onSubmit: onSubmit,
+                onCancel: onCancel
+            )
         }
 
         positionPanelNearCursor()
@@ -53,13 +59,15 @@ final class CompanionTextInputPanelManager: NSObject {
     }
 
     private func createPanel(
-        onSubmit: @escaping @MainActor (String) -> Void,
+        companionManager: CompanionManager,
+        onSubmit: @escaping @MainActor (String, [Data]) -> Void,
         onCancel: @escaping @MainActor () -> Void
     ) {
         let textInputView = CompanionTextInputPanelView(
-            onSubmit: { [weak self] messageText in
+            companionManager: companionManager,
+            onSubmit: { [weak self] messageText, attachmentData in
                 self?.hide()
-                onSubmit(messageText)
+                onSubmit(messageText, attachmentData)
             },
             onCancel: { [weak self] in
                 self?.hide()
@@ -180,40 +188,42 @@ final class CompanionTextInputPanelManager: NSObject {
 }
 
 private struct CompanionTextInputPanelView: View {
-    @State private var messageText = ""
+    @ObservedObject var companionManager: CompanionManager
+
+    @State private var messageText: String = ""
+    @State private var attachmentData: [Data] = []
     @FocusState private var isTextFieldFocused: Bool
 
-    let onSubmit: @MainActor (String) -> Void
+    let onSubmit: @MainActor (String, [Data]) -> Void
     let onCancel: @MainActor () -> Void
 
-    /// Tight capsule chip: 270×34 sat inside a 300×50 panel so the shadow
-    /// has breathing room. Designed to feel like a tooltip/companion bubble
-    /// next to the cursor, not a dialog.
-    private let chipWidth: CGFloat = 270
-    private let chipHeight: CGFloat = 34
+    /// Pill chip is the dominant element. Width fills the 360pt panel; height
+    /// matches the trio of trailing buttons (paperclip / submit / close).
+    private let chipHeight: CGFloat = 38
 
     var body: some View {
         HStack(spacing: 8) {
-            // Tiny cursor mark on the leading edge to tie this to Clicky's
-            // identity. Same color as the overlay cursor.
-            Image(systemName: "cursorarrow")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundColor(DS.Colors.overlayCursorBlue)
-
-            TextField("ask clicky…", text: $messageText)
+            TextField(
+                "type a question…",
+                text: $messageText
+            )
                 .textFieldStyle(.plain)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundColor(DS.Colors.textPrimary)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white)
                 .focused($isTextFieldFocused)
                 .onSubmit(submitMessage)
                 .overlay(IBeamCursorView())
 
+            paperclipButton
             submitButton
+            closeButton
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 5)
-        .frame(width: chipWidth, height: chipHeight)
+        .padding(.leading, 14)
+        .padding(.trailing, 6)
+        .frame(height: chipHeight)
+        .frame(maxWidth: .infinity)
         .background(chipBackground)
+        .padding(.horizontal, 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .onAppear {
             DispatchQueue.main.async {
@@ -223,53 +233,85 @@ private struct CompanionTextInputPanelView: View {
         .onExitCommand { onCancel() }
     }
 
+    // MARK: - Trailing Buttons
+
+    private var paperclipButton: some View {
+        Button(action: presentImageAttachmentPicker) {
+            ZStack {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(Color.white.opacity(0.9))
+                    .frame(width: 26, height: 26)
+
+                if !attachmentData.isEmpty {
+                    Text("\(attachmentData.count)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(companionManager.selectedCursorColor.displayColor)
+                        .padding(3)
+                        .background(
+                            Circle()
+                                .fill(Color.white)
+                        )
+                        .offset(x: 8, y: -8)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .accessibilityLabel("Attach image")
+    }
+
     private var submitButton: some View {
         Button(action: submitMessage) {
             Image(systemName: "arrow.up")
-                .font(.system(size: 10, weight: .heavy))
+                .font(.system(size: 11, weight: .heavy))
                 .foregroundColor(
-                    trimmedMessageText.isEmpty
-                        ? DS.Colors.textTertiary
-                        : DS.Colors.textOnAccent
+                    canSubmit
+                        ? companionManager.selectedCursorColor.displayColor
+                        : Color.white.opacity(0.4)
                 )
-                .frame(width: 24, height: 24)
+                .frame(width: 26, height: 26)
                 .background(
                     Circle()
-                        .fill(
-                            trimmedMessageText.isEmpty
-                                ? DS.Colors.surface4
-                                : DS.Colors.overlayCursorBlue
-                        )
+                        .fill(Color.white.opacity(canSubmit ? 0.95 : 0.5))
                 )
                 .overlay(
                     Circle()
-                        .stroke(
-                            trimmedMessageText.isEmpty
-                                ? DS.Colors.borderSubtle
-                                : Color.white.opacity(0.18),
-                            lineWidth: 0.5
-                        )
+                        .stroke(Color.white.opacity(0.25), lineWidth: 0.5)
                 )
         }
         .buttonStyle(.plain)
-        .disabled(trimmedMessageText.isEmpty)
-        .pointerCursor(isEnabled: !trimmedMessageText.isEmpty)
-        .animation(.easeOut(duration: 0.12), value: trimmedMessageText.isEmpty)
+        .disabled(!canSubmit)
+        .pointerCursor(isEnabled: canSubmit)
+        .animation(.easeOut(duration: 0.12), value: canSubmit)
+        .accessibilityLabel("Send")
+    }
+
+    private var closeButton: some View {
+        Button(action: { onCancel() }) {
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(Color.white.opacity(0.85))
+                .frame(width: 26, height: 26)
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .accessibilityLabel("Close")
     }
 
     private var chipBackground: some View {
         Capsule(style: .continuous)
-            .fill(DS.Colors.surface2)
+            .fill(companionManager.selectedCursorColor.displayColor)
             .overlay(
                 Capsule(style: .continuous)
-                    .stroke(DS.Colors.overlayCursorBlue.opacity(0.32), lineWidth: 0.8)
+                    .stroke(Color.white.opacity(0.25), lineWidth: 0.6)
             )
-            // Subtle inner top highlight — gives the chip a glassy lift.
+            // Inner glassy top highlight so the pill reads with depth.
             .overlay(
                 Capsule(style: .continuous)
                     .stroke(
                         LinearGradient(
-                            colors: [Color.white.opacity(0.08), Color.clear],
+                            colors: [Color.white.opacity(0.18), Color.clear],
                             startPoint: .top,
                             endPoint: .center
                         ),
@@ -277,17 +319,50 @@ private struct CompanionTextInputPanelView: View {
                     )
                     .blendMode(.plusLighter)
             )
-            .shadow(color: Color.black.opacity(0.45), radius: 14, x: 0, y: 6)
-            .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.20), radius: 10, x: 0, y: 0)
+            .shadow(color: Color.black.opacity(0.4), radius: 14, x: 0, y: 6)
+            .shadow(color: companionManager.selectedCursorColor.glowColor.opacity(0.35), radius: 12, x: 0, y: 0)
     }
 
-    private var trimmedMessageText: String {
-        messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+    // MARK: - Submission / Attachments
+
+    private var canSubmit: Bool {
+        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !attachmentData.isEmpty
     }
 
     private func submitMessage() {
-        let submittedMessageText = trimmedMessageText
-        guard !submittedMessageText.isEmpty else { return }
-        onSubmit(submittedMessageText)
+        let trimmedMessageText = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // We allow attachment-only submissions ("look at this") so the user
+        // can lean entirely on the screenshot pipeline if they want.
+        guard !trimmedMessageText.isEmpty || !attachmentData.isEmpty else { return }
+        onSubmit(trimmedMessageText, attachmentData)
+    }
+
+    /// Opens the standard macOS file picker filtered to images. Each picked
+    /// file is read as `Data` and stashed in `attachmentData` until the
+    /// user submits.
+    private func presentImageAttachmentPicker() {
+        let openPanel = NSOpenPanel()
+        openPanel.allowedContentTypes = [.image]
+        openPanel.allowsMultipleSelection = true
+        openPanel.canChooseDirectories = false
+        openPanel.canChooseFiles = true
+        openPanel.title = "Attach images"
+
+        // begin(completionHandler:) returns control immediately so the
+        // input chip stays focused while the picker is up.
+        openPanel.begin { [weak openPanel] modalResponse in
+            guard modalResponse == .OK, let openPanel else { return }
+            let pickedFileURLs = openPanel.urls
+
+            Task { @MainActor in
+                for fileURL in pickedFileURLs {
+                    if let fileData = try? Data(contentsOf: fileURL) {
+                        attachmentData.append(fileData)
+                    }
+                }
+                isTextFieldFocused = true
+            }
+        }
     }
 }

@@ -92,6 +92,10 @@ final class CompanionManager: ObservableObject {
     let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
     let overlayWindowManager = OverlayWindowManager()
     let textInputPanelManager = CompanionTextInputPanelManager()
+
+    /// Persistent user-supplied memory. Surfaced into Claude's system prompt so
+    /// every conversation starts with the user's saved context.
+    let notesStore = NotesStore()
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
@@ -143,6 +147,87 @@ final class CompanionManager: ObservableObject {
         selectedModel = model
         UserDefaults.standard.set(model, forKey: "selectedClaudeModel")
         claudeAPI.model = model
+    }
+
+    /// User-selected cursor color. Drives every overlay accent (triangle, glow,
+    /// waveform, spinner, navigation bubbles) plus the panel logo and the
+    /// floating text-input chip. Persisted so the choice survives relaunches.
+    @Published var selectedCursorColor: CursorColorOption = {
+        guard let storedRawValue = UserDefaults.standard.string(forKey: "selectedCursorColor"),
+              let storedOption = CursorColorOption(rawValue: storedRawValue) else {
+            return .blue
+        }
+        return storedOption
+    }()
+
+    func setSelectedCursorColor(_ cursorColor: CursorColorOption) {
+        selectedCursorColor = cursorColor
+        UserDefaults.standard.set(cursorColor.rawValue, forKey: "selectedCursorColor")
+    }
+
+    // MARK: - Monthly Usage Tracking
+
+    /// Soft "free plan" caps shown on the Settings popover. Not enforced —
+    /// they exist purely so the progress bars render with meaningful
+    /// denominators. Tweak these if you ever introduce real billing.
+    static let monthlyVoiceMessageCap: Int = 100
+    static let monthlyAgentMessageCap: Int = 35
+
+    /// Number of voice/text prompts the user has sent this period.
+    /// Resets to 0 when `monthlyUsagePeriodStart` rolls over (every 30 days).
+    @Published private(set) var monthlyVoiceMessageCount: Int = UserDefaults.standard.integer(forKey: "monthlyVoiceMessageCount")
+
+    /// Number of Claude responses received this period.
+    @Published private(set) var monthlyAgentMessageCount: Int = UserDefaults.standard.integer(forKey: "monthlyAgentMessageCount")
+
+    /// Anchor for the rolling 30-day usage period. The Settings card shows
+    /// "resets in Xd Yh" relative to `monthlyUsagePeriodStart + 30 days`.
+    @Published private(set) var monthlyUsagePeriodStart: Date = {
+        let storedTimestamp = UserDefaults.standard.double(forKey: "monthlyUsagePeriodStart")
+        if storedTimestamp > 0 {
+            return Date(timeIntervalSince1970: storedTimestamp)
+        }
+        // First launch — anchor the period to "now" and stash it so the
+        // countdown stays consistent across launches.
+        let now = Date()
+        UserDefaults.standard.set(now.timeIntervalSince1970, forKey: "monthlyUsagePeriodStart")
+        return now
+    }()
+
+    private static let monthlyUsagePeriodLength: TimeInterval = 60 * 60 * 24 * 30
+
+    /// Date the current usage period rolls over and the counts reset.
+    var monthlyUsagePeriodEnd: Date {
+        monthlyUsagePeriodStart.addingTimeInterval(Self.monthlyUsagePeriodLength)
+    }
+
+    func incrementMonthlyVoiceMessageCount() {
+        rolloverMonthlyUsagePeriodIfNeeded()
+        monthlyVoiceMessageCount += 1
+        UserDefaults.standard.set(monthlyVoiceMessageCount, forKey: "monthlyVoiceMessageCount")
+    }
+
+    func incrementMonthlyAgentMessageCount() {
+        rolloverMonthlyUsagePeriodIfNeeded()
+        monthlyAgentMessageCount += 1
+        UserDefaults.standard.set(monthlyAgentMessageCount, forKey: "monthlyAgentMessageCount")
+    }
+
+    /// Resets the counters and bumps the period start when the rolling
+    /// 30-day window has elapsed. Called before every increment so the
+    /// rollover happens lazily without a background timer.
+    private func rolloverMonthlyUsagePeriodIfNeeded() {
+        guard Date() >= monthlyUsagePeriodEnd else { return }
+
+        monthlyVoiceMessageCount = 0
+        monthlyAgentMessageCount = 0
+        let newPeriodStart = Date()
+        monthlyUsagePeriodStart = newPeriodStart
+
+        let defaults = UserDefaults.standard
+        defaults.set(0, forKey: "monthlyVoiceMessageCount")
+        defaults.set(0, forKey: "monthlyAgentMessageCount")
+        defaults.set(newPeriodStart.timeIntervalSince1970, forKey: "monthlyUsagePeriodStart")
     }
 
     /// User preference for whether the Clicky cursor should be shown.
@@ -636,10 +721,20 @@ final class CompanionManager: ObservableObject {
                         // Partial transcripts are hidden (waveform-only UI)
                     },
                     submitDraftText: { [weak self] finalTranscript in
-                        self?.lastTranscript = finalTranscript
+                        guard let self else { return }
+                        self.lastTranscript = finalTranscript
                         print("🗣️ Companion received transcript: \(finalTranscript)")
                         ClickyAnalytics.trackUserMessageSent(transcript: finalTranscript)
-                        self?.sendTranscriptToClaudeWithScreenshot(transcript: finalTranscript)
+                        self.incrementMonthlyVoiceMessageCount()
+
+                        // "remember that …" / "save note: …" never goes to Claude — it
+                        // becomes a saved note and Clicky just confirms it.
+                        if let capturedNoteText = Self.parseNoteCaptureText(from: finalTranscript) {
+                            self.captureNote(text: capturedNoteText)
+                            return
+                        }
+
+                        self.sendTranscriptToClaudeWithScreenshot(transcript: finalTranscript)
                     }
                 )
             }
@@ -677,8 +772,9 @@ final class CompanionManager: ObservableObject {
             dismissOnboardingPromptIfNeeded()
 
             textInputPanelManager.show(
-                onSubmit: { [weak self] typedMessage in
-                    self?.submitTypedMessage(typedMessage)
+                companionManager: self,
+                onSubmit: { [weak self] typedMessage, typedAttachments in
+                    self?.submitTypedMessage(typedMessage, attachments: typedAttachments)
                 },
                 onCancel: { [weak self] in
                     self?.scheduleTransientHideIfNeeded()
@@ -709,13 +805,99 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    private func submitTypedMessage(_ typedMessage: String) {
+    private func submitTypedMessage(_ typedMessage: String, attachments: [Data] = []) {
         let trimmedTypedMessage = typedMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTypedMessage.isEmpty else { return }
 
         lastTranscript = trimmedTypedMessage
         ClickyAnalytics.trackUserMessageSent(transcript: trimmedTypedMessage)
-        sendTranscriptToClaudeWithScreenshot(transcript: trimmedTypedMessage)
+        incrementMonthlyVoiceMessageCount()
+
+        // Note capture works for typed input the same way it works for voice —
+        // attachments are ignored when the user is just saving a memory.
+        if attachments.isEmpty,
+           let capturedNoteText = Self.parseNoteCaptureText(from: trimmedTypedMessage) {
+            captureNote(text: capturedNoteText)
+            return
+        }
+
+        sendTranscriptToClaudeWithScreenshot(
+            transcript: trimmedTypedMessage,
+            userAttachments: attachments
+        )
+    }
+
+    // MARK: - Note Capture
+
+    /// Detects a leading "remember that …" / "save note: …" intent and returns
+    /// the trailing memory text. Returns nil when the transcript is a normal
+    /// question. Case-insensitive; tolerates trailing punctuation in the
+    /// trigger phrase ("note:" / "note,") and a few spoken variants.
+    static func parseNoteCaptureText(from transcript: String) -> String? {
+        let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTranscript.isEmpty else { return nil }
+
+        // The triggers are intentionally specific — a stray "remember when …"
+        // story shouldn't accidentally save a note. Order matters: longer
+        // prefixes first so "save note that" matches before "save note".
+        let noteCapturePrefixes: [String] = [
+            "remember that ",
+            "remember to ",
+            "remember this:",
+            "remember:",
+            "please remember that ",
+            "please remember to ",
+            "save a note that ",
+            "save a note:",
+            "save note that ",
+            "save note:",
+            "save note ",
+            "make a note that ",
+            "make a note:",
+            "note that ",
+            "note:"
+        ]
+
+        let lowercasedTranscript = trimmedTranscript.lowercased()
+        for prefix in noteCapturePrefixes {
+            if lowercasedTranscript.hasPrefix(prefix) {
+                let prefixEndIndex = trimmedTranscript.index(trimmedTranscript.startIndex, offsetBy: prefix.count)
+                let capturedNoteText = trimmedTranscript[prefixEndIndex...]
+                    .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+                return capturedNoteText.isEmpty ? nil : capturedNoteText
+            }
+        }
+        return nil
+    }
+
+    /// Saves the captured text as a note and gives the user a brief audible
+    /// confirmation. We deliberately skip the Claude round-trip so saving a
+    /// note feels instant.
+    private func captureNote(text: String) {
+        guard let savedNote = notesStore.add(text: text) else { return }
+
+        ClickyAnalytics.trackNoteSaved()
+        print("📝 Saved note: \(savedNote.text)")
+
+        currentResponseTask?.cancel()
+        elevenLabsTTSClient.stopPlayback()
+        fallbackSpeechSynthesizer?.stopSpeaking(at: .immediate)
+        guidedActionProposal = nil
+        detectedElementBubbleText = nil
+
+        let confirmationText = "saved."
+        Task { @MainActor in
+            do {
+                try await elevenLabsTTSClient.speakText(confirmationText)
+                voiceState = .responding
+            } catch {
+                speakSystemVoiceFallback(confirmationText)
+            }
+            if !Task.isCancelled {
+                voiceState = .idle
+                scheduleTransientHideIfNeeded()
+            }
+        }
     }
 
     // MARK: - Companion Prompt
@@ -765,7 +947,13 @@ final class CompanionManager: ObservableObject {
     /// the spinner/processing state until TTS audio begins playing.
     /// Claude's response may include a [POINT:x,y:label] tag which triggers
     /// the buddy to fly to that element on screen.
-    private func sendTranscriptToClaudeWithScreenshot(transcript: String) {
+    /// `userAttachments` are extra images the user attached from the text
+    /// input pill (paperclip → file picker). They are appended after the
+    /// screen captures so Claude reads the screen context first.
+    private func sendTranscriptToClaudeWithScreenshot(
+        transcript: String,
+        userAttachments: [Data] = []
+    ) {
         currentResponseTask?.cancel()
         elevenLabsTTSClient.stopPlayback()
         fallbackSpeechSynthesizer?.stopSpeaking(at: .immediate)
@@ -786,9 +974,19 @@ final class CompanionManager: ObservableObject {
                 // Build image labels with the actual screenshot pixel dimensions
                 // so Claude's coordinate space matches the image it sees. We
                 // scale from screenshot pixels to display points ourselves.
-                let labeledImages = screenCaptures.map { capture in
+                var labeledImages = screenCaptures.map { capture in
                     let dimensionInfo = " (image dimensions: \(capture.screenshotWidthInPixels)x\(capture.screenshotHeightInPixels) pixels)"
                     return (data: capture.imageData, label: capture.label + dimensionInfo)
+                }
+
+                // User-provided attachments are appended AFTER the screen
+                // captures so Claude treats them as supplemental references
+                // rather than primary screen context.
+                for (attachmentIndex, attachmentData) in userAttachments.enumerated() {
+                    labeledImages.append((
+                        data: attachmentData,
+                        label: "User attachment \(attachmentIndex + 1)"
+                    ))
                 }
 
                 // Pass conversation history so Claude remembers prior exchanges
@@ -796,9 +994,18 @@ final class CompanionManager: ObservableObject {
                     (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
                 }
 
+                // Prepend the user's saved notes (if any) so Claude has their
+                // long-running context for every reply.
+                let combinedSystemPrompt: String = {
+                    guard let notesBlock = notesStore.systemPromptBlock() else {
+                        return Self.companionVoiceResponseSystemPrompt
+                    }
+                    return Self.companionVoiceResponseSystemPrompt + "\n\n" + notesBlock
+                }()
+
                 let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
                     images: labeledImages,
-                    systemPrompt: Self.companionVoiceResponseSystemPrompt,
+                    systemPrompt: combinedSystemPrompt,
                     conversationHistory: historyForAPI,
                     userPrompt: transcript,
                     onTextChunk: { _ in
@@ -905,6 +1112,7 @@ final class CompanionManager: ObservableObject {
                 print("🧠 Conversation history: \(conversationHistory.count) exchanges")
 
                 ClickyAnalytics.trackAIResponseReceived(response: spokenText)
+                incrementMonthlyAgentMessageCount()
 
                 // Play the response via TTS. Keep the spinner (processing state)
                 // until the audio actually starts playing, then switch to responding.

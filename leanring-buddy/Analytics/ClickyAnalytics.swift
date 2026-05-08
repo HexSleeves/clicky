@@ -125,6 +125,14 @@ enum ClickyAnalytics {
         ])
     }
 
+    static func trackNoteSaved() {
+        PostHogSDK.shared.capture("note_saved")
+    }
+
+    static func trackNoteDeleted() {
+        PostHogSDK.shared.capture("note_deleted")
+    }
+
     // MARK: - Errors
 
     /// An error occurred during the AI response pipeline.

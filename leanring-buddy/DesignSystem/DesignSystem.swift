@@ -143,6 +143,22 @@ enum DS {
         /// (screen overlay vs in-app UI).
         static let overlayCursorBlue = Color(hex: "#3380FF")
 
+        /// Companion glow color tuned to read on the dark overlay without smearing.
+        static let overlayCursorBlueGlow = Color(hex: "#5BA1FF")
+
+        /// Coral red cursor variant — warm, attention-grabbing.
+        static let overlayCursorRed = Color(hex: "#FF5C5C")
+        static let overlayCursorRedGlow = Color(hex: "#FF8585")
+
+        /// Amber yellow cursor variant.
+        static let overlayCursorYellow = Color(hex: "#FFC83D")
+        static let overlayCursorYellowGlow = Color(hex: "#FFD66B")
+
+        /// Emerald green cursor variant — reuses the success hue family but with a
+        /// dedicated glow value so it doesn't look like a state badge.
+        static let overlayCursorGreen = Color(hex: "#34D399")
+        static let overlayCursorGreenGlow = Color(hex: "#5BE2B0")
+
         // ── Floating Button Gradient ─────────────────────────────────
 
         /// The floating session button gradient colors (unchanged from original —

@@ -14,6 +14,12 @@ struct CompanionPanelView: View {
     @ObservedObject var companionManager: CompanionManager
     @State private var emailInput: String = ""
 
+    /// Owners (MenuBarPanelManager) wire these closures so the footer's
+    /// Notes and gear buttons can spawn the right popovers anchored under
+    /// their respective triggers. Default no-op makes preview rendering safe.
+    var onShowNotesPanel: (() -> Void)? = nil
+    var onShowSettingsPanel: (() -> Void)? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             panelHeader
@@ -27,9 +33,9 @@ struct CompanionPanelView: View {
 
             if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
                 Spacer()
-                    .frame(height: 12)
+                    .frame(height: 16)
 
-                modelPickerRow
+                cursorColorPickerRow
                     .padding(.horizontal, 16)
 
                 Spacer()
@@ -65,23 +71,6 @@ struct CompanionPanelView: View {
                     .padding(.horizontal, 16)
             }
 
-            // Show Clicky toggle — hidden for now
-            // if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-            //     Spacer()
-            //         .frame(height: 16)
-            //
-            //     showClickyCursorToggleRow
-            //         .padding(.horizontal, 16)
-            // }
-
-            if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-                Spacer()
-                    .frame(height: 16)
-
-                dmFarzaButton
-                    .padding(.horizontal, 16)
-            }
-
             Spacer()
                 .frame(height: 12)
 
@@ -101,14 +90,14 @@ struct CompanionPanelView: View {
 
     private var panelHeader: some View {
         HStack(spacing: 10) {
-            // Logo mark — small cursor glyph in the brand blue
+            // Logo mark — small cursor glyph in the user's chosen cursor color
             ZStack {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(DS.Colors.overlayCursorBlue.opacity(0.18))
+                    .fill(companionManager.selectedCursorColor.displayColor.opacity(0.18))
                     .frame(width: 26, height: 26)
                 Image(systemName: "cursorarrow")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundColor(DS.Colors.overlayCursorBlue)
+                    .foregroundColor(companionManager.selectedCursorColor.displayColor)
                     .offset(x: -1, y: -1)
             }
 
@@ -314,11 +303,11 @@ struct CompanionPanelView: View {
                 HStack(spacing: 10) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(DS.Colors.overlayCursorBlue.opacity(0.16))
+                            .fill(companionManager.selectedCursorColor.displayColor.opacity(0.16))
                             .frame(width: 28, height: 28)
                         Image(systemName: "cursorarrow.click")
                             .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(DS.Colors.overlayCursorBlue)
+                            .foregroundColor(companionManager.selectedCursorColor.displayColor)
                     }
 
                     VStack(alignment: .leading, spacing: 2) {
@@ -366,7 +355,7 @@ struct CompanionPanelView: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                    .stroke(DS.Colors.overlayCursorBlue.opacity(0.28), lineWidth: 0.7)
+                    .stroke(companionManager.selectedCursorColor.displayColor.opacity(0.28), lineWidth: 0.7)
             )
         }
     }
@@ -862,162 +851,130 @@ struct CompanionPanelView: View {
         .padding(.vertical, 4)
     }
 
-    // MARK: - Model Picker
+    // MARK: - Cursor Color Picker
 
-    private var modelPickerRow: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(DS.Colors.accentText)
-                Text("Model")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(DS.Colors.textSecondary)
+    private var cursorColorPickerRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Cursor color")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(DS.Colors.textSecondary)
+                .tracking(0.1)
+
+            HStack(spacing: 8) {
+                ForEach(CursorColorOption.allCases) { cursorColorOption in
+                    cursorColorTile(option: cursorColorOption)
+                }
             }
-
-            Spacer()
-
-            HStack(spacing: 2) {
-                modelOptionButton(label: "Sonnet", modelID: "claude-sonnet-4-6")
-                modelOptionButton(label: "Opus", modelID: "claude-opus-4-6")
-            }
-            .padding(2)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(DS.Colors.surface2)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
-            )
         }
-        .padding(.vertical, 2)
     }
 
-    private func modelOptionButton(label: String, modelID: String) -> some View {
-        let isSelected = companionManager.selectedModel == modelID
+    private func cursorColorTile(option: CursorColorOption) -> some View {
+        let isSelected = companionManager.selectedCursorColor == option
         return Button(action: {
-            companionManager.setSelectedModel(modelID)
+            companionManager.setSelectedCursorColor(option)
         }) {
-            Text(label)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(isSelected ? DS.Colors.textPrimary : DS.Colors.textTertiary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isSelected ? DS.Colors.accentSubtle : Color.clear)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(
-                            isSelected ? DS.Colors.accent.opacity(0.35) : Color.clear,
-                            lineWidth: 0.5
-                        )
-                )
-        }
-        .buttonStyle(.plain)
-        .pointerCursor()
-        .animation(.easeOut(duration: 0.15), value: isSelected)
-    }
-
-    // MARK: - DM Farza Button
-
-    private var dmFarzaButton: some View {
-        Button(action: {
-            if let url = URL(string: "https://x.com/farzatv") {
-                NSWorkspace.shared.open(url)
-            }
-        }) {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(DS.Colors.accentSubtle)
-                        .frame(width: 28, height: 28)
-                    Image(systemName: "bubble.left.and.bubble.right.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(DS.Colors.accentText)
-                }
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Got feedback? DM me")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(DS.Colors.textPrimary)
-                    Text("Bugs, ideas, anything — I read every message.")
-                        .font(.system(size: 10))
-                        .foregroundColor(DS.Colors.textTertiary)
-                }
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "arrow.up.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(DS.Colors.textTertiary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(
+            ZStack {
+                // Tinted card background — slightly tinted by the color so the
+                // tile reads as "the home of this color" rather than a neutral chip.
                 RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                    .fill(DS.Colors.surface1)
-            )
+                    .fill(option.displayColor.opacity(0.12))
+
+                // The triangle preview echoes the actual cursor on screen.
+                Triangle()
+                    .fill(option.displayColor)
+                    .frame(width: 16, height: 16)
+                    .rotationEffect(.degrees(20))
+                    .shadow(color: option.glowColor.opacity(0.7), radius: isSelected ? 6 : 3, x: 0, y: 0)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 56)
             .overlay(
                 RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                    .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+                    .stroke(
+                        isSelected ? option.displayColor : DS.Colors.borderSubtle,
+                        lineWidth: isSelected ? 1.5 : 0.5
+                    )
             )
         }
         .buttonStyle(.plain)
         .pointerCursor()
+        .accessibilityLabel("\(option.displayName) cursor")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .animation(.easeOut(duration: 0.15), value: isSelected)
     }
 
     // MARK: - Footer
 
+    /// Footer mirrors the new mockup: version on the left, Notes pill +
+    /// gear icon on the right. The two buttons defer their actions to the
+    /// hosting MenuBarPanelManager so popovers can be anchored correctly.
     private var footerSection: some View {
         HStack(spacing: 8) {
-            footerLink(
-                icon: "power",
-                label: "Quit",
-                tint: DS.Colors.destructiveText.opacity(0.85),
-                action: { NSApp.terminate(nil) }
-            )
-
-            if companionManager.hasCompletedOnboarding {
-                Rectangle()
-                    .fill(DS.Colors.borderSubtle)
-                    .frame(width: 0.5, height: 14)
-                    .padding(.horizontal, 4)
-
-                footerLink(
-                    icon: "play.circle",
-                    label: "Replay onboarding",
-                    tint: DS.Colors.textTertiary,
-                    action: { companionManager.replayOnboarding() }
-                )
-            }
+            Text(footerVersionString)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(DS.Colors.textTertiary)
 
             Spacer()
+
+            if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
+                notesFooterButton
+                settingsFooterButton
+            }
         }
     }
 
-    private func footerLink(
-        icon: String,
-        label: String,
-        tint: Color,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
+    private var notesFooterButton: some View {
+        Button(action: {
+            onShowNotesPanel?()
+        }) {
             HStack(spacing: 6) {
-                Image(systemName: icon)
+                Image(systemName: "bookmark")
                     .font(.system(size: 11, weight: .semibold))
-                Text(label)
-                    .font(.system(size: 12, weight: .medium))
+                Text("Notes")
+                    .font(.system(size: 11, weight: .semibold))
             }
-            .foregroundColor(tint)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
+            .foregroundColor(DS.Colors.textSecondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                Capsule()
+                    .fill(Color.white.opacity(0.05))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+            )
         }
         .buttonStyle(.plain)
         .pointerCursor()
+    }
+
+    private var settingsFooterButton: some View {
+        Button(action: {
+            onShowSettingsPanel?()
+        }) {
+            Image(systemName: "gearshape")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(DS.Colors.textSecondary)
+                .frame(width: 26, height: 26)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(0.05))
+                )
+                .overlay(
+                    Circle()
+                        .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .accessibilityLabel("Settings")
+    }
+
+    /// "v1.0.14" style label sourced from Info.plist so it never goes stale.
+    private var footerVersionString: String {
+        let shortVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        return shortVersion.isEmpty ? "" : "v\(shortVersion)"
     }
 
     // MARK: - Visual Helpers
@@ -1027,14 +984,15 @@ struct CompanionPanelView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(DS.Colors.background)
 
-            // Subtle radial glow at the top in the brand cursor blue.
+            // Subtle radial glow at the top tinted by the active cursor color
+            // so the panel chrome quietly tracks the user's chosen identity.
             // Sits inside the panel mask so it never bleeds outside the rounded shape.
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(
                     RadialGradient(
                         gradient: Gradient(colors: [
-                            DS.Colors.overlayCursorBlue.opacity(0.12),
-                            DS.Colors.overlayCursorBlue.opacity(0.0)
+                            companionManager.selectedCursorColor.displayColor.opacity(0.12),
+                            companionManager.selectedCursorColor.displayColor.opacity(0.0)
                         ]),
                         center: .init(x: 0.2, y: -0.05),
                         startRadius: 0,
