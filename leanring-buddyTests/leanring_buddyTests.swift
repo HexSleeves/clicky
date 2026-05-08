@@ -5,6 +5,7 @@
 //  Created by thorfinn on 3/2/26.
 //
 
+import AppKit
 import Testing
 @testable import leanring_buddy
 
@@ -35,6 +36,26 @@ struct leanring_buddyTests {
         )
 
         #expect(shouldTreatPermissionAsGranted)
+    }
+
+    @Test func controlCommandStartsTypeToTalkShortcut() async throws {
+        let transition = BuddyTypeToTalkShortcut.shortcutTransition(
+            for: .flagsChanged,
+            modifierFlagsRawValue: UInt64(NSEvent.ModifierFlags([.control, .command]).rawValue),
+            wasShortcutPreviouslyPressed: false
+        )
+
+        #expect(transition == .pressed)
+    }
+
+    @Test func releasingControlCommandEndsTypeToTalkShortcut() async throws {
+        let transition = BuddyTypeToTalkShortcut.shortcutTransition(
+            for: .flagsChanged,
+            modifierFlagsRawValue: 0,
+            wasShortcutPreviouslyPressed: true
+        )
+
+        #expect(transition == .released)
     }
 
 }

@@ -87,7 +87,10 @@ struct NavigationBubbleSizePreferenceKey: PreferenceKey {
 
 /// The buddy's behavioral mode. Controls whether it follows the cursor,
 /// is flying toward a detected UI element, or is pointing at an element.
-enum BuddyNavigationMode {
+/// Explicit Equatable conformance at file scope keeps the synthesized
+/// conformance nonisolated so SwiftUI's `==` checks don't get tagged
+/// as MainActor-isolated by Swift 6.
+enum BuddyNavigationMode: Equatable {
     /// Default — buddy follows the mouse cursor with spring animation
     case followingCursor
     /// Buddy is animating toward a detected UI element location

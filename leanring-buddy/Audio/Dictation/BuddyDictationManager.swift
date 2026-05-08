@@ -199,6 +199,72 @@ enum BuddyPushToTalkShortcut {
     }
 }
 
+enum BuddyTypeToTalkShortcut {
+    enum ShortcutTransition {
+        case none
+        case pressed
+        case released
+    }
+
+    private enum ShortcutEventType {
+        case flagsChanged
+        case keyDown
+        case keyUp
+    }
+
+    private static let typeToTalkModifierFlags: NSEvent.ModifierFlags = [.control, .command]
+
+    static let displayText = "ctrl + command"
+
+    static func shortcutTransition(
+        for eventType: CGEventType,
+        modifierFlagsRawValue: UInt64,
+        wasShortcutPreviouslyPressed: Bool
+    ) -> ShortcutTransition {
+        guard let shortcutEventType = shortcutEventType(for: eventType) else { return .none }
+
+        return shortcutTransition(
+            for: shortcutEventType,
+            modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(modifierFlagsRawValue))
+                .intersection(.deviceIndependentFlagsMask),
+            wasShortcutPreviouslyPressed: wasShortcutPreviouslyPressed
+        )
+    }
+
+    private static func shortcutEventType(for eventType: CGEventType) -> ShortcutEventType? {
+        switch eventType {
+        case .flagsChanged:
+            return .flagsChanged
+        case .keyDown:
+            return .keyDown
+        case .keyUp:
+            return .keyUp
+        default:
+            return nil
+        }
+    }
+
+    private static func shortcutTransition(
+        for shortcutEventType: ShortcutEventType,
+        modifierFlags: NSEvent.ModifierFlags,
+        wasShortcutPreviouslyPressed: Bool
+    ) -> ShortcutTransition {
+        guard shortcutEventType == .flagsChanged else { return .none }
+
+        let isShortcutCurrentlyPressed = modifierFlags.contains(typeToTalkModifierFlags)
+
+        if isShortcutCurrentlyPressed && !wasShortcutPreviouslyPressed {
+            return .pressed
+        }
+
+        if !isShortcutCurrentlyPressed && wasShortcutPreviouslyPressed {
+            return .released
+        }
+
+        return .none
+    }
+}
+
 enum BuddyDictationPermissionProblem {
     case microphoneAccessDenied
     case speechRecognitionDenied

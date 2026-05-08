@@ -1,8 +1,40 @@
-worker/node_modules/
+# Secrets / local config
+.env
+Secrets.xcconfig
 worker/.dev.vars
-.DS_Store
-*.xcuserstate
+
+# Dependencies
+worker/node_modules/
+
+# Cloudflare Wrangler local dev cache / build artifacts
+worker/.wrangler/
+worker/dist/
+
+# Build output
 build/
 releases/
+DerivedData/
+.build/
+
+# Xcode user/local state
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Swift / SwiftPM
+.swiftpm/
+Package.resolved
+
+# Tooling / agent scratch
 .claude/
 coding-plans/
+.cache/
+.idea/
+*.log
+
+# Debug daemon scratch files
+dbgmd-*
+
+# OS junk
+.DS_Store
+Thumbs.db

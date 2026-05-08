@@ -82,7 +82,6 @@ enum ClickyAnalytics {
     /// Transcription completed and the user's message is being sent to the AI.
     static func trackUserMessageSent(transcript: String) {
         PostHogSDK.shared.capture("user_message_sent", properties: [
-            "transcript": transcript,
             "character_count": transcript.count
         ])
     }
@@ -90,7 +89,6 @@ enum ClickyAnalytics {
     /// Claude responded and the response is being spoken via TTS.
     static func trackAIResponseReceived(response: String) {
         PostHogSDK.shared.capture("ai_response_received", properties: [
-            "response": response,
             "character_count": response.count
         ])
     }
@@ -100,6 +98,24 @@ enum ClickyAnalytics {
     static func trackElementPointed(elementLabel: String?) {
         PostHogSDK.shared.capture("element_pointed", properties: [
             "element_label": elementLabel ?? "unknown"
+        ])
+    }
+
+    static func trackGuidedActionProposed() {
+        PostHogSDK.shared.capture("guided_action_proposed", properties: [
+            "action_type": "click_target"
+        ])
+    }
+
+    static func trackGuidedActionDone() {
+        PostHogSDK.shared.capture("guided_action_done", properties: [
+            "action_type": "click_target"
+        ])
+    }
+
+    static func trackGuidedActionCancelled() {
+        PostHogSDK.shared.capture("guided_action_cancelled", properties: [
+            "action_type": "click_target"
         ])
     }
 

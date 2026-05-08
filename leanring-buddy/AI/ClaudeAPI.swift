@@ -201,9 +201,13 @@ class ClaudeAPI {
                deltaType == "text_delta",
                let textChunk = delta["text"] as? String {
                 accumulatedResponseText += textChunk
-                // Send the accumulated text so far to the UI for progressive rendering
+                // Send the accumulated text so far to the UI for progressive rendering.
+                // Explicit MainActor hop so the compiler doesn't warn that the surrounding
+                // `await` has no async work — the hop itself is the async work.
                 let currentAccumulatedText = accumulatedResponseText
-                await onTextChunk(currentAccumulatedText)
+                await MainActor.run {
+                    onTextChunk(currentAccumulatedText)
+                }
             }
         }
 

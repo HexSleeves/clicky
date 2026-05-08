@@ -56,7 +56,9 @@ final class CompanionResponseOverlayManager {
         // Keep the response visible for a few seconds after streaming ends,
         // then fade out so the user has time to read the last chunk.
         let hideWork = DispatchWorkItem { [weak self] in
-            self?.fadeOutAndHide()
+            Task { @MainActor [weak self] in
+                self?.fadeOutAndHide()
+            }
         }
         autoHideWorkItem = hideWork
         DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: hideWork)

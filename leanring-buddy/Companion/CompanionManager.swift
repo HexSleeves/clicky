@@ -7,7 +7,7 @@
 //  exposes observable voice state for the panel UI.
 //
 
-import AVFoundation
+@preconcurrency import AVFoundation
 import Combine
 import Foundation
 import PostHog
@@ -19,6 +19,27 @@ enum CompanionVoiceState {
     case listening
     case processing
     case responding
+}
+
+struct GuidedActionProposal: Identifiable, Equatable {
+    enum ActionType: Equatable {
+        case clickTarget
+    }
+
+    enum State: Equatable {
+        case proposed
+        case cancelled
+        case completedByUser
+    }
+
+    let id = UUID()
+    let actionType: ActionType
+    let targetScreenLocation: CGPoint
+    let targetDisplayFrame: CGRect
+    let targetLabel: String
+    let instruction: String
+    let screenNumber: Int?
+    var state: State = .proposed
 }
 
 @MainActor
@@ -41,6 +62,7 @@ final class CompanionManager: ObservableObject {
     /// Custom speech bubble text for the pointing animation. When set,
     /// BlueCursorView uses this instead of a random pointer phrase.
     @Published var detectedElementBubbleText: String?
+    @Published private(set) var guidedActionProposal: GuidedActionProposal?
 
     // MARK: - Onboarding Video State (shared across all screen overlays)
 
@@ -61,16 +83,19 @@ final class CompanionManager: ObservableObject {
 
     private var onboardingMusicPlayer: AVAudioPlayer?
     private var onboardingMusicFadeTimer: Timer?
+    private var fallbackSpeechSynthesizer: AVSpeechSynthesizer?
 
     let buddyDictationManager = BuddyDictationManager()
     let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
     let overlayWindowManager = OverlayWindowManager()
+    let textInputPanelManager = CompanionTextInputPanelManager()
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
     /// Base URL for the Cloudflare Worker proxy. All API requests route
     /// through this so keys never ship in the app binary.
-    private static let workerBaseURL = "https://your-worker-name.your-subdomain.workers.dev"
+    private static let workerBaseURL = AppBundleConfiguration.stringValue(forKey: "WORKER_BASE_URL")
+        ?? "https://clicky-proxy.lecoqjosephjacob.workers.dev"
 
     private lazy var claudeAPI: ClaudeAPI = {
         return ClaudeAPI(proxyURL: "\(Self.workerBaseURL)/chat", model: selectedModel)
@@ -89,6 +114,7 @@ final class CompanionManager: ObservableObject {
     private var currentResponseTask: Task<Void, Never>?
 
     private var shortcutTransitionCancellable: AnyCancellable?
+    private var typeToTalkShortcutTransitionCancellable: AnyCancellable?
     private var voiceStateCancellable: AnyCancellable?
     private var audioPowerCancellable: AnyCancellable?
     private var accessibilityCheckTimer: Timer?
@@ -239,7 +265,9 @@ final class CompanionManager: ObservableObject {
 
     private func startOnboardingMusic() {
         stopOnboardingMusic()
-        guard let musicURL = Bundle.main.url(forResource: "ff", withExtension: "mp3") else {
+        guard let musicURL = Bundle.main.url(forResource: "ff", withExtension: "mp3")
+            ?? Bundle.main.url(forResource: "ff", withExtension: "mp3", subdirectory: "Audio")
+        else {
             print("⚠️ Clicky: ff.mp3 not found in bundle")
             return
         }
@@ -252,7 +280,9 @@ final class CompanionManager: ObservableObject {
 
             // After 1m 30s, fade the music out over 3s
             onboardingMusicFadeTimer = Timer.scheduledTimer(withTimeInterval: 90.0, repeats: false) { [weak self] _ in
-                self?.fadeOutOnboardingMusic()
+                Task { @MainActor [weak self] in
+                    self?.fadeOutOnboardingMusic()
+                }
             }
         } catch {
             print("⚠️ Clicky: Failed to play onboarding music: \(error)")
@@ -268,15 +298,24 @@ final class CompanionManager: ObservableObject {
         let volumeDecrement = player.volume / Float(fadeSteps)
         var stepsRemaining = fadeSteps
 
+        // Player is mutated only on MainActor inside the Task hop below.
+        // We don't capture `player` directly — we re-fetch from self each tick
+        // so the @Sendable closure has no non-Sendable captures.
         onboardingMusicFadeTimer = Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { [weak self] timer in
-            stepsRemaining -= 1
-            player.volume -= volumeDecrement
+            Task { @MainActor [weak self] in
+                guard let self, let activePlayer = self.onboardingMusicPlayer else {
+                    timer.invalidate()
+                    return
+                }
+                stepsRemaining -= 1
+                activePlayer.volume -= volumeDecrement
 
-            if stepsRemaining <= 0 {
-                timer.invalidate()
-                player.stop()
-                self?.onboardingMusicPlayer = nil
-                self?.onboardingMusicFadeTimer = nil
+                if stepsRemaining <= 0 {
+                    timer.invalidate()
+                    activePlayer.stop()
+                    self.onboardingMusicPlayer = nil
+                    self.onboardingMusicFadeTimer = nil
+                }
             }
         }
     }
@@ -287,15 +326,50 @@ final class CompanionManager: ObservableObject {
         detectedElementBubbleText = nil
     }
 
+    func replayGuidedActionTarget() {
+        guard let guidedActionProposal else { return }
+
+        showOverlayForCurrentInteractionIfNeeded()
+        detectedElementScreenLocation = nil
+        detectedElementDisplayFrame = nil
+        detectedElementBubbleText = guidedActionProposal.instruction
+
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            guard let self else { return }
+            self.detectedElementScreenLocation = guidedActionProposal.targetScreenLocation
+            self.detectedElementDisplayFrame = guidedActionProposal.targetDisplayFrame
+        }
+    }
+
+    func markGuidedActionDone() {
+        guard guidedActionProposal != nil else { return }
+        guidedActionProposal?.state = .completedByUser
+        ClickyAnalytics.trackGuidedActionDone()
+        self.guidedActionProposal = nil
+        clearDetectedElementLocation()
+    }
+
+    func cancelGuidedActionProposal() {
+        guard guidedActionProposal != nil else { return }
+        guidedActionProposal?.state = .cancelled
+        ClickyAnalytics.trackGuidedActionCancelled()
+        self.guidedActionProposal = nil
+        clearDetectedElementLocation()
+    }
+
     func stop() {
         globalPushToTalkShortcutMonitor.stop()
         buddyDictationManager.cancelCurrentDictation()
+        textInputPanelManager.hide()
         overlayWindowManager.hideOverlay()
         transientHideTask?.cancel()
 
         currentResponseTask?.cancel()
         currentResponseTask = nil
+        guidedActionProposal = nil
         shortcutTransitionCancellable?.cancel()
+        typeToTalkShortcutTransitionCancellable?.cancel()
         voiceStateCancellable?.cancel()
         audioPowerCancellable?.cancel()
         accessibilityCheckTimer?.invalidate()
@@ -468,6 +542,13 @@ final class CompanionManager: ObservableObject {
             .sink { [weak self] transition in
                 self?.handleShortcutTransition(transition)
             }
+
+        typeToTalkShortcutTransitionCancellable = globalPushToTalkShortcutMonitor
+            .typeToTalkShortcutTransitionPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] transition in
+                self?.handleTypeToTalkShortcutTransition(transition)
+            }
     }
 
     private func handleShortcutTransition(_ transition: BuddyPushToTalkShortcut.ShortcutTransition) {
@@ -490,10 +571,12 @@ final class CompanionManager: ObservableObject {
 
             // Dismiss the menu bar panel so it doesn't cover the screen
             NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+            textInputPanelManager.hide()
 
             // Cancel any in-progress response and TTS from a previous utterance
             currentResponseTask?.cancel()
             elevenLabsTTSClient.stopPlayback()
+            fallbackSpeechSynthesizer?.stopSpeaking(at: .immediate)
             clearDetectedElementLocation()
 
             // Dismiss the onboarding prompt if it's showing
@@ -539,10 +622,71 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    private func handleTypeToTalkShortcutTransition(_ transition: BuddyTypeToTalkShortcut.ShortcutTransition) {
+        switch transition {
+        case .pressed:
+            guard !buddyDictationManager.isDictationInProgress else { return }
+            guard !showOnboardingVideo else { return }
+
+            transientHideTask?.cancel()
+            transientHideTask = nil
+
+            showOverlayForCurrentInteractionIfNeeded()
+
+            NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+            currentResponseTask?.cancel()
+            elevenLabsTTSClient.stopPlayback()
+            fallbackSpeechSynthesizer?.stopSpeaking(at: .immediate)
+            voiceState = .idle
+            clearDetectedElementLocation()
+            dismissOnboardingPromptIfNeeded()
+
+            textInputPanelManager.show(
+                onSubmit: { [weak self] typedMessage in
+                    self?.submitTypedMessage(typedMessage)
+                },
+                onCancel: { [weak self] in
+                    self?.scheduleTransientHideIfNeeded()
+                }
+            )
+        case .released, .none:
+            break
+        }
+    }
+
+    private func showOverlayForCurrentInteractionIfNeeded() {
+        if !isOverlayVisible {
+            overlayWindowManager.hasShownOverlayBefore = true
+            overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+            isOverlayVisible = true
+        }
+    }
+
+    private func dismissOnboardingPromptIfNeeded() {
+        guard showOnboardingPrompt else { return }
+
+        withAnimation(.easeOut(duration: 0.3)) {
+            onboardingPromptOpacity = 0.0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            self.showOnboardingPrompt = false
+            self.onboardingPromptText = ""
+        }
+    }
+
+    private func submitTypedMessage(_ typedMessage: String) {
+        let trimmedTypedMessage = typedMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTypedMessage.isEmpty else { return }
+
+        lastTranscript = trimmedTypedMessage
+        ClickyAnalytics.trackUserMessageSent(transcript: trimmedTypedMessage)
+        sendTranscriptToClaudeWithScreenshot(transcript: trimmedTypedMessage)
+    }
+
     // MARK: - Companion Prompt
 
     private static let companionVoiceResponseSystemPrompt = """
-    you're clicky, a friendly always-on companion that lives in the user's menu bar. the user just spoke to you via push-to-talk and you can see their screen(s). your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
+    you're clicky, a friendly always-on companion that lives in the user's menu bar. the user just spoke to you via push-to-talk or typed to you from the floating text box, and you can see their screen(s). your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
 
     rules:
     - default to one or two sentences. be direct and dense. BUT if the user asks you to explain more, go deeper, or elaborate, then go all out — give a thorough, detailed explanation with no length limit.
@@ -569,6 +713,9 @@ final class CompanionManager: ObservableObject {
 
     if pointing wouldn't help, append [POINT:none].
 
+    guided actions:
+    when the user asks you to click, open, select, press, choose, or show where to click, do not claim that clicky clicked anything. clicky can only guide the user. identify exactly one target, tell the user what they should click, and append the point tag for that target. keep the spoken instruction short and concrete.
+
     examples:
     - user asks how to color grade in final cut: "you'll want to open the color inspector — it's right up in the top right area of the toolbar. click that and you'll get all the color wheels and curves. [POINT:1100,42:color inspector]"
     - user asks what html is: "html stands for hypertext markup language, it's basically the skeleton of every web page. curious how it connects to the css you're looking at? [POINT:none]"
@@ -586,6 +733,9 @@ final class CompanionManager: ObservableObject {
     private func sendTranscriptToClaudeWithScreenshot(transcript: String) {
         currentResponseTask?.cancel()
         elevenLabsTTSClient.stopPlayback()
+        fallbackSpeechSynthesizer?.stopSpeaking(at: .immediate)
+        guidedActionProposal = nil
+        detectedElementBubbleText = nil
 
         currentResponseTask = Task {
             // Stay in processing (spinner) state — no streaming text displayed
@@ -594,6 +744,7 @@ final class CompanionManager: ObservableObject {
             do {
                 // Capture all connected screens so the AI has full context
                 let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+                let isGuidedActionRequest = Self.isGuidedActionRequest(transcript)
 
                 guard !Task.isCancelled else { return }
 
@@ -676,6 +827,24 @@ final class CompanionManager: ObservableObject {
                     detectedElementScreenLocation = globalLocation
                     detectedElementDisplayFrame = displayFrame
                     ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
+
+                    if isGuidedActionRequest {
+                        let targetLabel = parseResult.elementLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let displayLabel = targetLabel?.isEmpty == false ? targetLabel! : "target"
+                        let proposal = GuidedActionProposal(
+                            actionType: .clickTarget,
+                            targetScreenLocation: globalLocation,
+                            targetDisplayFrame: displayFrame,
+                            targetLabel: displayLabel,
+                            instruction: "Click \(displayLabel)",
+                            screenNumber: parseResult.screenNumber
+                        )
+                        guidedActionProposal = proposal
+                        detectedElementBubbleText = proposal.instruction
+                        NotificationCenter.default.post(name: .clickyShowPanel, object: nil)
+                        ClickyAnalytics.trackGuidedActionProposed()
+                    }
+
                     print("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
                 } else {
                     print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
@@ -706,8 +875,8 @@ final class CompanionManager: ObservableObject {
                         voiceState = .responding
                     } catch {
                         ClickyAnalytics.trackTTSError(error: error.localizedDescription)
-                        print("⚠️ ElevenLabs TTS error: \(error)")
-                        speakCreditsErrorFallback()
+                        print("⚠️ ElevenLabs unavailable, using system voice: \(error.localizedDescription)")
+                        speakSystemVoiceFallback(spokenText)
                     }
                 }
             } catch is CancellationError {
@@ -715,7 +884,7 @@ final class CompanionManager: ObservableObject {
             } catch {
                 ClickyAnalytics.trackResponseError(error: error.localizedDescription)
                 print("⚠️ Companion response error: \(error)")
-                speakCreditsErrorFallback()
+                speakSystemVoiceFallback("I hit an error while trying to answer that.")
             }
 
             if !Task.isCancelled {
@@ -755,17 +924,41 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// Speaks a hardcoded error message using macOS system TTS when API
-    /// credits run out. Uses NSSpeechSynthesizer so it works even when
-    /// ElevenLabs is down.
-    private func speakCreditsErrorFallback() {
-        let utterance = "I'm all out of credits. Please DM Farza and tell him to bring me back to life."
-        let synthesizer = NSSpeechSynthesizer()
-        synthesizer.startSpeaking(utterance)
+    /// Uses macOS system TTS when ElevenLabs is unavailable.
+    /// Uses AVSpeechSynthesizer (replacement for the deprecated NSSpeechSynthesizer).
+    private func speakSystemVoiceFallback(_ text: String) {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
+
+        fallbackSpeechSynthesizer?.stopSpeaking(at: .immediate)
+        let synthesizer = AVSpeechSynthesizer()
+        fallbackSpeechSynthesizer = synthesizer
+        let utterance = AVSpeechUtterance(string: trimmedText)
+        synthesizer.speak(utterance)
         voiceState = .responding
     }
 
     // MARK: - Point Tag Parsing
+
+    static func isGuidedActionRequest(_ transcript: String) -> Bool {
+        let normalizedTranscript = transcript.lowercased()
+        let guidedActionPhrases = [
+            "click",
+            "open",
+            "select",
+            "press",
+            "choose",
+            "tap",
+            "where do i click",
+            "show me where",
+            "show where",
+            "what do i click",
+            "which button",
+            "which menu"
+        ]
+
+        return guidedActionPhrases.contains { normalizedTranscript.contains($0) }
+    }
 
     /// Result of parsing a [POINT:...] tag from Claude's response.
     struct PointingParseResult {
@@ -855,8 +1048,10 @@ final class CompanionManager: ObservableObject {
             forTimes: [NSValue(time: demoTriggerTime)],
             queue: .main
         ) { [weak self] in
-            ClickyAnalytics.trackOnboardingDemoTriggered()
-            self?.performOnboardingDemoInteraction()
+            Task { @MainActor [weak self] in
+                ClickyAnalytics.trackOnboardingDemoTriggered()
+                self?.performOnboardingDemoInteraction()
+            }
         }
 
         // Fade out and clean up when the video finishes
@@ -865,15 +1060,17 @@ final class CompanionManager: ObservableObject {
             object: player.currentItem,
             queue: .main
         ) { [weak self] _ in
-            guard let self else { return }
-            ClickyAnalytics.trackOnboardingVideoCompleted()
-            self.onboardingVideoOpacity = 0.0
-            // Wait for the 2s fade-out animation to complete before tearing down
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                self.tearDownOnboardingVideo()
-                // After the video disappears, stream in the prompt to try talking
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    self.startOnboardingPromptStream()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                ClickyAnalytics.trackOnboardingVideoCompleted()
+                self.onboardingVideoOpacity = 0.0
+                // Wait for the 2s fade-out animation to complete before tearing down
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    self.tearDownOnboardingVideo()
+                    // After the video disappears, stream in the prompt to try talking
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        self.startOnboardingPromptStream()
+                    }
                 }
             }
         }
@@ -894,7 +1091,7 @@ final class CompanionManager: ObservableObject {
     }
 
     private func startOnboardingPromptStream() {
-        let message = "press control + option and introduce yourself"
+        let message = "press control + option to talk, or control + command to type"
         onboardingPromptText = ""
         showOnboardingPrompt = true
         onboardingPromptOpacity = 0.0
@@ -904,25 +1101,31 @@ final class CompanionManager: ObservableObject {
         }
 
         var currentIndex = 0
-        Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { timer in
-            guard currentIndex < message.count else {
-                timer.invalidate()
-                // Auto-dismiss after 10 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-                    guard self.showOnboardingPrompt else { return }
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        self.onboardingPromptOpacity = 0.0
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        self.showOnboardingPrompt = false
-                        self.onboardingPromptText = ""
-                    }
+        Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { [weak self] timer in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    timer.invalidate()
+                    return
                 }
-                return
+                guard currentIndex < message.count else {
+                    timer.invalidate()
+                    // Auto-dismiss after 10 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+                        guard self.showOnboardingPrompt else { return }
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            self.onboardingPromptOpacity = 0.0
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            self.showOnboardingPrompt = false
+                            self.onboardingPromptText = ""
+                        }
+                    }
+                    return
+                }
+                let index = message.index(message.startIndex, offsetBy: currentIndex)
+                self.onboardingPromptText.append(message[index])
+                currentIndex += 1
             }
-            let index = message.index(message.startIndex, offsetBy: currentIndex)
-            self.onboardingPromptText.append(message[index])
-            currentIndex += 1
         }
     }
 

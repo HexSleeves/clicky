@@ -14,6 +14,7 @@ import Foundation
 
 final class GlobalPushToTalkShortcutMonitor: ObservableObject {
     let shortcutTransitionPublisher = PassthroughSubject<BuddyPushToTalkShortcut.ShortcutTransition, Never>()
+    let typeToTalkShortcutTransitionPublisher = PassthroughSubject<BuddyTypeToTalkShortcut.ShortcutTransition, Never>()
 
     private var globalEventTap: CFMachPort?
     private var globalEventTapRunLoopSource: CFRunLoopSource?
@@ -22,6 +23,7 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
     /// Published so the overlay can hide immediately on key release without
     /// waiting for the async dictation state pipeline to catch up.
     @Published private(set) var isShortcutCurrentlyPressed = false
+    @Published private(set) var isTypeToTalkShortcutCurrentlyPressed = false
 
     deinit {
         stop()
@@ -85,6 +87,7 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
 
     func stop() {
         isShortcutCurrentlyPressed = false
+        isTypeToTalkShortcutCurrentlyPressed = false
 
         if let globalEventTapRunLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), globalEventTapRunLoopSource, .commonModes)
@@ -109,11 +112,17 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         }
 
         let eventKeyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        let modifierFlagsRawValue = event.flags.rawValue
         let shortcutTransition = BuddyPushToTalkShortcut.shortcutTransition(
             for: eventType,
             keyCode: eventKeyCode,
-            modifierFlagsRawValue: event.flags.rawValue,
+            modifierFlagsRawValue: modifierFlagsRawValue,
             wasShortcutPreviouslyPressed: isShortcutCurrentlyPressed
+        )
+        let typeToTalkShortcutTransition = BuddyTypeToTalkShortcut.shortcutTransition(
+            for: eventType,
+            modifierFlagsRawValue: modifierFlagsRawValue,
+            wasShortcutPreviouslyPressed: isTypeToTalkShortcutCurrentlyPressed
         )
 
         switch shortcutTransition {
@@ -125,6 +134,17 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         case .released:
             isShortcutCurrentlyPressed = false
             shortcutTransitionPublisher.send(.released)
+        }
+
+        switch typeToTalkShortcutTransition {
+        case .none:
+            break
+        case .pressed:
+            isTypeToTalkShortcutCurrentlyPressed = true
+            typeToTalkShortcutTransitionPublisher.send(.pressed)
+        case .released:
+            isTypeToTalkShortcutCurrentlyPressed = false
+            typeToTalkShortcutTransitionPublisher.send(.released)
         }
 
         return Unmanaged.passUnretained(event)
