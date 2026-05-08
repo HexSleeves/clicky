@@ -43,7 +43,7 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 
 **Cursor Overlay**: A full-screen transparent `NSPanel` hosts the blue cursor companion. It's non-activating, joins all Spaces, and never steals focus. The cursor position, response text, waveform, and pointing animations all render in this overlay via SwiftUI through `NSHostingView`.
 
-**Guided Action Mode**: Clicky can turn action-intent prompts (for example, "where do I click?") into a guide-only action proposal. The app uses the existing `[POINT:x,y:label:screenN]` coordinate path to fly the cursor to the target and show a panel preview. It does not synthesize clicks, typing, hotkeys, or scroll events.
+**Guided Action Mode**: Clicky can turn action-intent prompts (for example, "where do I click?") into a confirmed action proposal. The app uses the existing `[POINT:x,y:label:screenN]` coordinate path to fly the cursor to the target and show a panel preview. After the user presses the panel's Click button, Clicky hides the panel and posts one left-click at the target. The panel also has an "Auto-click actions" bypass setting that skips confirmation and immediately performs that same one-click action. It does not synthesize typing, hotkeys, scroll events, or multi-step action sequences.
 
 **Global Push-To-Talk Shortcut**: Background push-to-talk uses a listen-only `CGEvent` tap instead of an AppKit global monitor so modifier-based shortcuts like `ctrl + option` are detected more reliably while the app is running in the background.
 

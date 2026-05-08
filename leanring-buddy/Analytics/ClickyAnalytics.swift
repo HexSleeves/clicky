@@ -113,6 +113,12 @@ enum ClickyAnalytics {
         ])
     }
 
+    static func trackGuidedActionClicked() {
+        PostHogSDK.shared.capture("guided_action_clicked", properties: [
+            "action_type": "click_target"
+        ])
+    }
+
     static func trackGuidedActionCancelled() {
         PostHogSDK.shared.capture("guided_action_cancelled", properties: [
             "action_type": "click_target"

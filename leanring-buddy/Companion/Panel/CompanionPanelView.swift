@@ -31,6 +31,12 @@ struct CompanionPanelView: View {
 
                 modelPickerRow
                     .padding(.horizontal, 16)
+
+                Spacer()
+                    .frame(height: 12)
+
+                guidedActionBypassToggleRow
+                    .padding(.horizontal, 16)
             }
 
             if companionManager.hasCompletedOnboarding,
@@ -320,7 +326,7 @@ struct CompanionPanelView: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(DS.Colors.textPrimary)
                             .lineLimit(1)
-                        Text("Target highlighted. You stay in control.")
+                        Text("Confirm before Clicky clicks.")
                             .font(.system(size: 10))
                             .foregroundColor(DS.Colors.textTertiary)
                             .lineLimit(1)
@@ -331,17 +337,17 @@ struct CompanionPanelView: View {
 
                 HStack(spacing: 8) {
                     guidedActionButton(
-                        label: "Show target",
-                        icon: "scope",
+                        label: "Click",
+                        icon: "cursorarrow.click",
                         isPrimary: true,
-                        action: { companionManager.replayGuidedActionTarget() }
+                        action: { companionManager.performGuidedActionClick() }
                     )
 
                     guidedActionButton(
-                        label: "Done",
-                        icon: "checkmark",
+                        label: "Show target",
+                        icon: "scope",
                         isPrimary: false,
-                        action: { companionManager.markGuidedActionDone() }
+                        action: { companionManager.replayGuidedActionTarget() }
                     )
 
                     guidedActionButton(
@@ -392,6 +398,51 @@ struct CompanionPanelView: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
+    }
+
+    private var guidedActionBypassToggleRow: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(companionManager.isGuidedActionBypassEnabled ? DS.Colors.warning : DS.Colors.textTertiary)
+                .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Auto-click actions")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(DS.Colors.textSecondary)
+                Text("Skips the Click confirmation.")
+                    .font(.system(size: 10))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Toggle("", isOn: Binding(
+                get: { companionManager.isGuidedActionBypassEnabled },
+                set: { companionManager.setGuidedActionBypassEnabled($0) }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .tint(DS.Colors.warning)
+            .scaleEffect(0.75)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                .fill(DS.Colors.surface1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                .stroke(
+                    companionManager.isGuidedActionBypassEnabled
+                    ? DS.Colors.warning.opacity(0.35)
+                    : DS.Colors.borderSubtle,
+                    lineWidth: 0.5
+                )
+        )
     }
 
     // MARK: - Email + Start Button

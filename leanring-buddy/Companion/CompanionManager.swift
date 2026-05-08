@@ -9,6 +9,7 @@
 
 @preconcurrency import AVFoundation
 import Combine
+import CoreGraphics
 import Foundation
 import PostHog
 import ScreenCaptureKit
@@ -28,8 +29,10 @@ struct GuidedActionProposal: Identifiable, Equatable {
 
     enum State: Equatable {
         case proposed
+        case executing
         case cancelled
         case completedByUser
+        case completedByClicky
     }
 
     let id = UUID()
@@ -148,6 +151,13 @@ final class CompanionManager: ObservableObject {
     @Published var isClickyCursorEnabled: Bool = UserDefaults.standard.object(forKey: "isClickyCursorEnabled") == nil
         ? true
         : UserDefaults.standard.bool(forKey: "isClickyCursorEnabled")
+
+    @Published var isGuidedActionBypassEnabled: Bool = UserDefaults.standard.bool(forKey: "isGuidedActionBypassEnabled")
+
+    func setGuidedActionBypassEnabled(_ enabled: Bool) {
+        isGuidedActionBypassEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "isGuidedActionBypassEnabled")
+    }
 
     func setClickyCursorEnabled(_ enabled: Bool) {
         isClickyCursorEnabled = enabled
@@ -348,6 +358,31 @@ final class CompanionManager: ObservableObject {
         ClickyAnalytics.trackGuidedActionDone()
         self.guidedActionProposal = nil
         clearDetectedElementLocation()
+    }
+
+    func performGuidedActionClick() {
+        guard var guidedActionProposal else { return }
+        guard hasAccessibilityPermission else {
+            _ = WindowPositionManager.requestAccessibilityPermission()
+            return
+        }
+
+        guidedActionProposal.state = .executing
+        self.guidedActionProposal = guidedActionProposal
+        NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard let self else { return }
+            Self.postLeftMouseClick(
+                at: guidedActionProposal.targetScreenLocation,
+                on: guidedActionProposal.targetDisplayFrame
+            )
+            guidedActionProposal.state = .completedByClicky
+            ClickyAnalytics.trackGuidedActionClicked()
+            self.guidedActionProposal = nil
+            self.clearDetectedElementLocation()
+        }
     }
 
     func cancelGuidedActionProposal() {
@@ -714,7 +749,7 @@ final class CompanionManager: ObservableObject {
     if pointing wouldn't help, append [POINT:none].
 
     guided actions:
-    when the user asks you to click, open, select, press, choose, or show where to click, do not claim that clicky clicked anything. clicky can only guide the user. identify exactly one target, tell the user what they should click, and append the point tag for that target. keep the spoken instruction short and concrete.
+    when the user asks you to click, open, select, press, choose, or show where to click, clicky can perform one click after your response if the app setting allows it or the user confirms it. identify exactly one target and append the point tag for that target. keep the spoken response short, natural, and action-oriented. do not say "you can click it yourself", "click it yourself", or "i can't click". good responses sound like "got it, i'll click the send button." or "i found it — clicking the deploy button." never claim the click already happened before the point tag is processed.
 
     examples:
     - user asks how to color grade in final cut: "you'll want to open the color inspector — it's right up in the top right area of the toolbar. click that and you'll get all the color wheels and curves. [POINT:1100,42:color inspector]"
@@ -841,8 +876,13 @@ final class CompanionManager: ObservableObject {
                         )
                         guidedActionProposal = proposal
                         detectedElementBubbleText = proposal.instruction
-                        NotificationCenter.default.post(name: .clickyShowPanel, object: nil)
                         ClickyAnalytics.trackGuidedActionProposed()
+
+                        if isGuidedActionBypassEnabled {
+                            performGuidedActionClick()
+                        } else {
+                            NotificationCenter.default.post(name: .clickyShowPanel, object: nil)
+                        }
                     }
 
                     print("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
@@ -939,6 +979,38 @@ final class CompanionManager: ObservableObject {
     }
 
     // MARK: - Point Tag Parsing
+
+    private static func postLeftMouseClick(at appKitScreenLocation: CGPoint, on displayFrame: CGRect) {
+        let quartzEventLocation = CGPoint(
+            x: appKitScreenLocation.x,
+            y: displayFrame.maxY - appKitScreenLocation.y
+        )
+        let eventSource = CGEventSource(stateID: .hidSystemState)
+
+        CGWarpMouseCursorPosition(quartzEventLocation)
+        CGAssociateMouseAndMouseCursorPosition(boolean_t(1))
+
+        CGEvent(
+            mouseEventSource: eventSource,
+            mouseType: .mouseMoved,
+            mouseCursorPosition: quartzEventLocation,
+            mouseButton: .left
+        )?.post(tap: .cghidEventTap)
+
+        CGEvent(
+            mouseEventSource: eventSource,
+            mouseType: .leftMouseDown,
+            mouseCursorPosition: quartzEventLocation,
+            mouseButton: .left
+        )?.post(tap: .cghidEventTap)
+
+        CGEvent(
+            mouseEventSource: eventSource,
+            mouseType: .leftMouseUp,
+            mouseCursorPosition: quartzEventLocation,
+            mouseButton: .left
+        )?.post(tap: .cghidEventTap)
+    }
 
     static func isGuidedActionRequest(_ transcript: String) -> Bool {
         let normalizedTranscript = transcript.lowercased()
