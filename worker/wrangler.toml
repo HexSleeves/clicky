@@ -4,6 +4,10 @@ compatibility_date = "2024-01-01"
 
 [vars]
 ELEVENLABS_VOICE_ID = "CwhRBWXzGAHq8TQ4Fs17"
+# TURN_SHARED_SECRET ships as a Cloudflare secret; the value below is a
+# placeholder so vitest workers pool can mint test credentials. In
+# production set with: `npx wrangler secret put TURN_SHARED_SECRET`.
+TURN_SHARED_SECRET = "test-only-not-a-real-secret"
 
 # Phase 1 Lane B — pairing session Durable Objects.
 # One DO per pair attempt. Holds the 6-digit code, attempt counter,

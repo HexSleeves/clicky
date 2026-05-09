@@ -13,10 +13,12 @@
  *   POST /signal/:pairId/send → relay offer/answer/ICE
  *   POST /signal/:pairId/poll → drain peer's mailbox
  *   POST /signal/:pairId/end  → tear down the signaling session
+ *   POST /turn-credentials  → short-lived TURN REST API credentials
  */
 
 import { handlePairGenerate, handlePairVerify } from "./pairing/handlers";
 import { handleSignalRoute } from "./signaling/handlers";
+import { handleTurnCredentials } from "./turn/handlers";
 
 export { PairingSessionDO } from "./pairing/PairingSessionDO";
 
@@ -26,6 +28,8 @@ interface Env {
   ELEVENLABS_VOICE_ID: string;
   ASSEMBLYAI_API_KEY: string;
   PAIRING_SESSIONS: DurableObjectNamespace;
+  TURN_SHARED_SECRET: string;
+  TURN_URLS?: string;
 }
 
 export default {
@@ -55,6 +59,10 @@ export default {
 
       if (url.pathname === "/pair/verify") {
         return await handlePairVerify(request, env);
+      }
+
+      if (url.pathname === "/turn-credentials") {
+        return await handleTurnCredentials(request, env);
       }
 
       const signalResponse = await handleSignalRoute(request, env);

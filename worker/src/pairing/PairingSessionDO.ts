@@ -128,6 +128,8 @@ export class PairingSessionDO implements DurableObject {
         return await this.handleVerify(request);
       case "/consume-session-token":
         return await this.handleConsumeSessionToken(request);
+      case "/verify-session-token":
+        return await this.handleVerifySessionToken(request);
       case "/signal/send":
         return await this.handleSignalSend(request);
       case "/signal/poll":
@@ -296,6 +298,32 @@ export class PairingSessionDO implements DurableObject {
       outcome: "consumed",
     };
     return jsonResponse(consumedResponseBody, 200);
+  }
+
+  // MARK: - Lightweight session-token check used by sibling endpoints
+  // (e.g. /turn-credentials) that don't need to mutate state.
+
+  private async handleVerifySessionToken(request: Request): Promise<Response> {
+    const requestBody = (await request.json().catch(() => null)) as
+      | { sessionToken?: unknown }
+      | null;
+    const submittedToken =
+      requestBody && typeof requestBody.sessionToken === "string"
+        ? requestBody.sessionToken
+        : "";
+
+    const currentState = await this.loadState();
+    if (
+      !currentState ||
+      currentState.sessionToken === null ||
+      submittedToken !== currentState.sessionToken
+    ) {
+      return jsonResponse({ outcome: "unauthorized" }, 401);
+    }
+    if (currentState.endedAt !== null) {
+      return jsonResponse({ outcome: "sessionEnded" }, 410);
+    }
+    return jsonResponse({ outcome: "ok" }, 200);
   }
 
   // MARK: - Signaling
