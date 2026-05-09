@@ -18,12 +18,6 @@ private final class KeyableTextInputPanel: NSPanel {
 final class CompanionTextInputPanelManager: NSObject {
     private var panel: NSPanel?
     private var clickOutsideMonitor: Any?
-    /// Watches mouse-moved events while the panel is visible so the chip
-    /// can track the cursor (or Clicky's blue cursor) as it moves around.
-    /// Two monitors needed: global for when our app isn't key (rare while
-    /// typing), local for when it is.
-    private var globalMouseMoveMonitor: Any?
-    private var localMouseMoveMonitor: Any?
 
     private let panelWidth: CGFloat = 360
     private let panelHeight: CGFloat = 54
@@ -41,13 +35,20 @@ final class CompanionTextInputPanelManager: NSObject {
             )
         }
 
+        // Position once at show time, then freeze. The previous
+        // implementation re-positioned on every mouse-moved event so
+        // the chip tracked the cursor — which made the attach /
+        // submit / close icons moving targets that are unclickable
+        // for low-vision or low-precision users (Sunday observation:
+        // "if it follows the cursor they cannot click the attach
+        // icon"). Spotlight-style frozen placement is the right
+        // pattern.
         positionPanelNearCursor()
 
         NSApp.activate(ignoringOtherApps: true)
         panel?.makeKeyAndOrderFront(nil)
         panel?.orderFrontRegardless()
         installClickOutsideMonitor(onCancel: onCancel)
-        installMouseFollowMonitor()
     }
 
     func hide() {
@@ -55,7 +56,6 @@ final class CompanionTextInputPanelManager: NSObject {
         panel?.contentView = nil
         panel = nil
         removeClickOutsideMonitor()
-        removeMouseFollowMonitor()
     }
 
     private func createPanel(
@@ -146,43 +146,6 @@ final class CompanionTextInputPanelManager: NSObject {
         if let clickOutsideMonitor {
             NSEvent.removeMonitor(clickOutsideMonitor)
             self.clickOutsideMonitor = nil
-        }
-    }
-
-    /// Repositions the panel near the cursor on every mouse move so the
-    /// chip "follows" the user's pointer (and Clicky's blue cursor overlay
-    /// since they share a position). Both global + local monitors needed
-    /// because the panel takes key focus while typing.
-    private func installMouseFollowMonitor() {
-        removeMouseFollowMonitor()
-
-        let handler: () -> Void = { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.positionPanelNearCursor()
-            }
-        }
-
-        globalMouseMoveMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.mouseMoved]
-        ) { _ in handler() }
-
-        // Local monitor must return the event so the field still receives it.
-        localMouseMoveMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.mouseMoved]
-        ) { event in
-            handler()
-            return event
-        }
-    }
-
-    private func removeMouseFollowMonitor() {
-        if let globalMouseMoveMonitor {
-            NSEvent.removeMonitor(globalMouseMoveMonitor)
-            self.globalMouseMoveMonitor = nil
-        }
-        if let localMouseMoveMonitor {
-            NSEvent.removeMonitor(localMouseMoveMonitor)
-            self.localMouseMoveMonitor = nil
         }
     }
 }
