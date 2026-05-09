@@ -10,9 +10,13 @@
  *   POST /transcribe-token  → AssemblyAI streaming token
  *   POST /pair/generate     → mint a 6-digit pair code (kid side)
  *   POST /pair/verify       → validate pair code (senior side)
+ *   POST /signal/:pairId/send → relay offer/answer/ICE
+ *   POST /signal/:pairId/poll → drain peer's mailbox
+ *   POST /signal/:pairId/end  → tear down the signaling session
  */
 
 import { handlePairGenerate, handlePairVerify } from "./pairing/handlers";
+import { handleSignalRoute } from "./signaling/handlers";
 
 export { PairingSessionDO } from "./pairing/PairingSessionDO";
 
@@ -52,6 +56,9 @@ export default {
       if (url.pathname === "/pair/verify") {
         return await handlePairVerify(request, env);
       }
+
+      const signalResponse = await handleSignalRoute(request, env);
+      if (signalResponse) return signalResponse;
     } catch (error) {
       console.error(`[${url.pathname}] Unhandled error:`, error);
       return new Response(
