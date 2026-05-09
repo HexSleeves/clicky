@@ -5,15 +5,23 @@
  * ships with raw API keys. Keys are stored as Cloudflare secrets.
  *
  * Routes:
- *   POST /chat  → Anthropic Messages API (streaming)
- *   POST /tts   → ElevenLabs TTS API
+ *   POST /chat              → Anthropic Messages API (streaming)
+ *   POST /tts               → ElevenLabs TTS API
+ *   POST /transcribe-token  → AssemblyAI streaming token
+ *   POST /pair/generate     → mint a 6-digit pair code (kid side)
+ *   POST /pair/verify       → validate pair code (senior side)
  */
+
+import { handlePairGenerate, handlePairVerify } from "./pairing/handlers";
+
+export { PairingSessionDO } from "./pairing/PairingSessionDO";
 
 interface Env {
   ANTHROPIC_API_KEY: string;
   ELEVENLABS_API_KEY: string;
   ELEVENLABS_VOICE_ID: string;
   ASSEMBLYAI_API_KEY: string;
+  PAIRING_SESSIONS: DurableObjectNamespace;
 }
 
 export default {
@@ -35,6 +43,14 @@ export default {
 
       if (url.pathname === "/transcribe-token") {
         return await handleTranscribeToken(env);
+      }
+
+      if (url.pathname === "/pair/generate") {
+        return await handlePairGenerate(request, env);
+      }
+
+      if (url.pathname === "/pair/verify") {
+        return await handlePairVerify(request, env);
       }
     } catch (error) {
       console.error(`[${url.pathname}] Unhandled error:`, error);

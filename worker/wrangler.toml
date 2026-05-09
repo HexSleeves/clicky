@@ -4,3 +4,17 @@ compatibility_date = "2024-01-01"
 
 [vars]
 ELEVENLABS_VOICE_ID = "CwhRBWXzGAHq8TQ4Fs17"
+
+# Phase 1 Lane B — pairing session Durable Objects.
+# One DO per pair attempt. Holds the 6-digit code, attempt counter,
+# 5-minute TTL, and the one-shot session token returned on successful
+# verification. Eviction-safe: any DO that ages out simply forces the
+# kid to mint a fresh code, which is also what happens on the 5-min
+# expiry path.
+[[durable_objects.bindings]]
+name = "PAIRING_SESSIONS"
+class_name = "PairingSessionDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["PairingSessionDO"]
