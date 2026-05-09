@@ -93,6 +93,19 @@ final class CompanionManager: ObservableObject {
     let overlayWindowManager = OverlayWindowManager()
     let textInputPanelManager = CompanionTextInputPanelManager()
 
+    // MARK: - Phase 1 senior-side composition (eng review decisions #1, #5, #6)
+    //
+    // CompanionManager owns the existing Claude voice loop. The managers
+    // below own the Phase 1 senior-side concerns; composition keeps them
+    // independently testable (see leanring-buddyTests/RoleManagerTests etc.)
+    // while CompanionManager remains the single point of wiring.
+    let audioSessionCoordinator = AudioSessionCoordinator()
+    let roleManager = RoleManager()
+    let pairingManager = PairingManager()
+    lazy var remoteSessionManager: RemoteSessionManager = RemoteSessionManager(
+        audioSessionCoordinator: audioSessionCoordinator
+    )
+
     /// Persistent user-supplied memory. Surfaced into Claude's system prompt so
     /// every conversation starts with the user's saved context.
     let notesStore = NotesStore()
@@ -300,6 +313,7 @@ final class CompanionManager: ObservableObject {
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
+        wireAudioSessionCoordination()
         // Eagerly touch the Claude API so its TLS warmup handshake completes
         // well before the onboarding demo fires at ~40s into the video.
         _ = claudeAPI
@@ -312,6 +326,22 @@ final class CompanionManager: ObservableObject {
             overlayWindowManager.hasShownOverlayBefore = true
             overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
             isOverlayVisible = true
+        }
+    }
+
+    /// Wires the AudioSessionCoordinator into the dictation manager and
+    /// installs the preemption hook so a remote-help session can suspend
+    /// an in-flight push-to-talk recording cleanly. Phase 1 only handles
+    /// `.pushToTalk` preemption; TTS preemption follows in Lane A when
+    /// ElevenLabsTTSClient gets its lifecycle delegate.
+    private func wireAudioSessionCoordination() {
+        buddyDictationManager.audioSessionCoordinator = audioSessionCoordinator
+
+        audioSessionCoordinator.onPreemption = { [weak self] previousOwner in
+            guard let self else { return }
+            if previousOwner == .pushToTalk {
+                self.buddyDictationManager.cancelCurrentDictation(preserveDraftText: true)
+            }
         }
     }
 

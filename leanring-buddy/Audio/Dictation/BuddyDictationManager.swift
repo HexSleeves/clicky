@@ -346,6 +346,13 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     /// rapid follow-up requests that arrive before macOS updates its cache.
     private var lastPermissionRequestCompletedAt: Date?
 
+    /// Optional audio-pipeline gatekeeper. When set (composed in by
+    /// CompanionManager), every push-to-talk start passes through
+    /// `acquire(.pushToTalk)` so a remote-help session can preempt PTT
+    /// cleanly. Stays nil for unit tests that exercise this manager in
+    /// isolation.
+    var audioSessionCoordinator: AudioSessionCoordinator?
+
     override init() {
         let transcriptionProvider = BuddyTranscriptionProviderFactory.makeDefaultProvider()
         self.transcriptionProvider = transcriptionProvider
@@ -484,6 +491,16 @@ final class BuddyDictationManager: NSObject, ObservableObject {
             print("🎙️ BuddyDictationManager: start request superseded")
             isPreparingToRecord = false
             return
+        }
+
+        if let audioSessionCoordinator {
+            let acquireOutcome = audioSessionCoordinator.acquire(.pushToTalk)
+            if case .rejected(let currentOwner) = acquireOutcome {
+                print("🎙️ BuddyDictationManager: PTT suspended — audio session held by \(currentOwner)")
+                isPreparingToRecord = false
+                lastErrorMessage = "Voice input is paused while remote help is active."
+                return
+            }
         }
 
         draftTextBeforeCurrentDictation = currentDraftText
@@ -713,6 +730,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         )
         microphoneButtonRecordingStartedAt = nil
         lastRecordedAudioPowerSampleDate = .distantPast
+        audioSessionCoordinator?.release(.pushToTalk)
     }
 
     private func buildTranscriptionKeyterms() -> [String] {
