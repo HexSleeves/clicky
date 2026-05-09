@@ -33,6 +33,10 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     private let companionManager = CompanionManager()
     private var sparkleUpdaterController: SPUStandardUpdaterController?
 
+    /// First-launch role picker. Held by the app delegate so its
+    /// observation subscription stays alive until the user picks.
+    private var rolePickerWindowController: RolePickerWindowController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🎯 Clicky: Starting...")
         print("🎯 Clicky: Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown")")
@@ -44,13 +48,38 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
         companionManager.start()
+
+        if companionManager.roleManager.needsRoleSelection {
+            // First launch ever (or storage was wiped). Block the rest
+            // of onboarding behind the role pick — every UI surface
+            // gates on role, so we can't render anything sensible until
+            // we know which mode this Mac is in.
+            rolePickerWindowController = RolePickerWindowController(
+                roleManager: companionManager.roleManager,
+                onRoleSelected: { [weak self] in
+                    self?.continueLaunchAfterRoleSelected()
+                }
+            )
+            rolePickerWindowController?.presentIfNeeded()
+        } else {
+            continueLaunchAfterRoleSelected()
+        }
+
+        registerAsLoginItemIfNeeded()
+        // startSparkleUpdater()
+    }
+
+    /// Resumes the normal launch flow once a role is in place. Called
+    /// either directly (when a role was already persisted) or by the
+    /// role-picker callback (after first-launch selection).
+    private func continueLaunchAfterRoleSelected() {
+        rolePickerWindowController = nil
+
         // Auto-open the panel if the user still needs to do something:
         // either they haven't onboarded yet, or permissions were revoked.
         if !companionManager.hasCompletedOnboarding || !companionManager.allPermissionsGranted {
             menuBarPanelManager?.showPanelOnLaunch()
         }
-        registerAsLoginItemIfNeeded()
-        // startSparkleUpdater()
     }
 
     func applicationWillTerminate(_ notification: Notification) {

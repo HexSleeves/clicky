@@ -918,7 +918,12 @@ struct CompanionPanelView: View {
 
             if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
                 notesFooterButton
-                settingsFooterButton
+                // Gear / settings popover is a kid-side surface (per
+                // Phase 1 design — Mom should not have to navigate
+                // menus). Hidden when the Mac is in senior mode.
+                if companionManager.roleManager.shouldShowAdvancedSettings {
+                    settingsFooterButton
+                }
             }
         }
     }
