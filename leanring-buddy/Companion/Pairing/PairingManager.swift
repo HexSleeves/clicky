@@ -133,5 +133,92 @@ final class PairingManager: ObservableObject {
         consecutiveWrongAttempts = 0
         lockoutUntil = nil
         pairedPeerToken = nil
+        activePairId = nil
+        lastNetworkError = nil
+    }
+
+    // MARK: - Network-backed flow (Phase 1 wiring to Lane B)
+
+    /// Worker pair-id of the kid-side mint, returned alongside
+    /// `activePairCode` after a successful `requestNewPairCodeFromWorker`.
+    /// Senior side fills this in after a successful verify.
+    @Published private(set) var activePairId: String?
+
+    /// Most recent network-side error, if any. Surfaced by the UI so
+    /// "couldn't reach the server" is distinguishable from "code wrong."
+    @Published private(set) var lastNetworkError: PairingNetworkError?
+
+    /// Kid side: ask the Worker to mint a fresh 6-digit code. On
+    /// success, both `activePairCode` and `activePairId` are set so
+    /// the kid-side UI can render the code AND remember which DO
+    /// holds it.
+    func requestNewPairCodeFromWorker(client: PairingNetworkClient) async {
+        lastNetworkError = nil
+        do {
+            let mintResponse = try await client.generatePairCode()
+            self.activePairCode = PairCode(
+                digits: mintResponse.code,
+                issuedAt: Date(),
+                expiresAt: mintResponse.expiresAt
+            )
+            self.activePairId = mintResponse.pairId
+        } catch let error as PairingNetworkError {
+            lastNetworkError = error
+        } catch {
+            lastNetworkError = .networkUnreachable
+        }
+    }
+
+    /// Senior side: submit `enteredDigits` to the Worker. On success,
+    /// `pairedPeerToken` is set with the session token. On mismatch,
+    /// the local retry/lockout policy in `consecutiveWrongAttempts`
+    /// is updated to mirror the Worker's view (the Worker
+    /// authoritatively caps at 5; we keep a local mirror so the UI
+    /// can show "4 left" without an extra request).
+    func submitEnteredPairCode(
+        _ enteredDigits: String,
+        forKidPairId kidPairId: String,
+        client: PairingNetworkClient,
+        now: Date = Date()
+    ) async {
+        lastNetworkError = nil
+        if let lockoutDeadline = lockoutUntil, lockoutDeadline > now {
+            return
+        }
+        if lockoutUntil != nil {
+            lockoutUntil = nil
+            consecutiveWrongAttempts = 0
+        }
+
+        do {
+            let outcome = try await client.verifyPairCode(
+                pairId: kidPairId,
+                code: enteredDigits
+            )
+            switch outcome {
+            case .success(let sessionToken):
+                consecutiveWrongAttempts = 0
+                lockoutUntil = nil
+                pairedPeerToken = sessionToken
+                activePairId = kidPairId
+            case .codeExpired:
+                activePairCode = nil
+            case .codeMismatch(let triesRemaining):
+                consecutiveWrongAttempts = max(
+                    0,
+                    Self.maxConsecutiveWrongAttempts - triesRemaining
+                )
+                if triesRemaining == 0 {
+                    lockoutUntil = now.addingTimeInterval(Self.lockoutDuration)
+                }
+            case .lockedOut:
+                consecutiveWrongAttempts = Self.maxConsecutiveWrongAttempts
+                lockoutUntil = now.addingTimeInterval(Self.lockoutDuration)
+            }
+        } catch let error as PairingNetworkError {
+            lastNetworkError = error
+        } catch {
+            lastNetworkError = .networkUnreachable
+        }
     }
 }

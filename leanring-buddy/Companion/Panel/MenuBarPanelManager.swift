@@ -41,6 +41,11 @@ final class MenuBarPanelManager: NSObject {
     /// popover — closing the menu-bar panel does not close Notes.
     private let notesWindowController: NotesWindowController
 
+    /// Pairing window. Lazy because most launches won't open it; we
+    /// don't want to spin up a URLSession + window object until the
+    /// user actually clicks "Pair".
+    private var pairingWindowController: PairingWindowController?
+
     private let companionManager: CompanionManager
     private let panelWidth: CGFloat = 320
     /// Tall enough for the new cursor-color picker row plus the existing
@@ -176,6 +181,21 @@ final class MenuBarPanelManager: NSObject {
         hideSettingsPopover()
     }
 
+    private func showPairingWindow() {
+        if pairingWindowController == nil {
+            pairingWindowController = PairingWindowController(
+                roleManager: companionManager.roleManager,
+                pairingManager: companionManager.pairingManager,
+                networkClient: companionManager.makePairingNetworkClient()
+            )
+        }
+        // Hide the menu-bar panel so the pairing window has the user's
+        // full attention; closing the panel also avoids the "click
+        // outside" auto-dismiss firing on every text-field focus.
+        hidePanel()
+        pairingWindowController?.presentWindow()
+    }
+
     private func createPanel() {
         let companionPanelView = CompanionPanelView(
             companionManager: companionManager,
@@ -184,6 +204,9 @@ final class MenuBarPanelManager: NSObject {
             },
             onShowSettingsPanel: { [weak self] in
                 self?.showSettingsPopover()
+            },
+            onShowPairingPanel: { [weak self] in
+                self?.showPairingWindow()
             }
         )
             .frame(width: panelWidth)

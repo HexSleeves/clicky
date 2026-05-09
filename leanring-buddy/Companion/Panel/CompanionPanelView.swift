@@ -19,6 +19,7 @@ struct CompanionPanelView: View {
     /// their respective triggers. Default no-op makes preview rendering safe.
     var onShowNotesPanel: (() -> Void)? = nil
     var onShowSettingsPanel: (() -> Void)? = nil
+    var onShowPairingPanel: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -917,6 +918,7 @@ struct CompanionPanelView: View {
             Spacer()
 
             if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
+                pairingFooterButton
                 notesFooterButton
                 // Gear / settings popover is a kid-side surface (per
                 // Phase 1 design — Mom should not have to navigate
@@ -926,6 +928,38 @@ struct CompanionPanelView: View {
                 }
             }
         }
+    }
+
+    /// Footer button that opens the pairing window. Visible while a
+    /// pairing isn't established yet; flips to "Paired ✓" once
+    /// `pairedPeerToken` is set so users can tell at a glance whether
+    /// the two Macs have shaken hands.
+    private var pairingFooterButton: some View {
+        Button(action: {
+            onShowPairingPanel?()
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: companionManager.pairingManager.pairedPeerToken == nil
+                      ? "link.circle"
+                      : "checkmark.circle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(companionManager.pairingManager.pairedPeerToken == nil ? "Pair" : "Paired")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundColor(DS.Colors.textSecondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                Capsule()
+                    .fill(Color.white.opacity(0.05))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
     }
 
     private var notesFooterButton: some View {

@@ -125,6 +125,15 @@ final class CompanionManager: ObservableObject {
         return ElevenLabsTTSClient(proxyURL: "\(Self.workerBaseURL)/tts")
     }()
 
+    /// Lazy pairing client. Same Worker base URL as the rest of the
+    /// proxy traffic. Surfaced as a method (not a stored property) so
+    /// pairing UI views construct an instance scoped to their own
+    /// async task and we don't keep a long-lived URLSession bound to
+    /// the manager.
+    func makePairingNetworkClient() -> PairingNetworkClient {
+        PairingNetworkClient(workerBaseURLString: Self.workerBaseURL)
+    }
+
     /// Conversation history so Claude remembers prior exchanges within a session.
     /// Each entry is the user's transcript and Claude's response.
     private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
