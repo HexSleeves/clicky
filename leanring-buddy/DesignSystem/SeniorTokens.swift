@@ -146,16 +146,22 @@ extension DS {
             /// `reduceMotion` accessibility flag. If reduce-motion is
             /// on, returns `nil` so the caller's value updates apply
             /// instantly (teleport) rather than tweening.
-            static func cursorFlightAnimation(reduceMotion: Bool) -> Animation? {
-                reduceMotion ? nil : .easeOut(duration: cursorFlightDurationSeconds)
+            ///
+            /// `SwiftUI.Animation` is fully qualified because we sit
+            /// inside `extension DS` and `DS.Animation` is the existing
+            /// kid-side easing enum — Swift would otherwise resolve
+            /// `Animation` to `DS.Animation` and the compiler errors
+            /// with "no member 'easeOut'".
+            static func cursorFlightAnimation(reduceMotion: Bool) -> SwiftUI.Animation? {
+                reduceMotion ? nil : SwiftUI.Animation.easeOut(duration: cursorFlightDurationSeconds)
             }
 
-            static func fadeInAnimation(reduceMotion: Bool) -> Animation? {
-                reduceMotion ? nil : .easeOut(duration: fadeInDurationSeconds)
+            static func fadeInAnimation(reduceMotion: Bool) -> SwiftUI.Animation? {
+                reduceMotion ? nil : SwiftUI.Animation.easeOut(duration: fadeInDurationSeconds)
             }
 
-            static func fadeOutAnimation(reduceMotion: Bool) -> Animation? {
-                reduceMotion ? nil : .easeIn(duration: fadeOutDurationSeconds)
+            static func fadeOutAnimation(reduceMotion: Bool) -> SwiftUI.Animation? {
+                reduceMotion ? nil : SwiftUI.Animation.easeIn(duration: fadeOutDurationSeconds)
             }
         }
     }
