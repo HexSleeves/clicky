@@ -103,6 +103,9 @@ enum RemoteWireMessageCodec {
         case "click.confirmation":
             let payload = try jsonDecoder.decode(ClickConfirmation.self, from: payloadData)
             return .clickConfirmation(envelope: envelope, payload: payload)
+        case "help.session.request":
+            let payload = try jsonDecoder.decode(HelpSessionRequest.self, from: payloadData)
+            return .helpSessionRequest(envelope: envelope, payload: payload)
         default:
             return .unsupported(envelope: envelope, rawKind: rawKind)
         }
@@ -114,6 +117,7 @@ enum RemoteWireMessageCodec {
         case .snapRequest: return "snap.request"
         case .snapDelivery: return "snap.delivery"
         case .clickConfirmation: return "click.confirmation"
+        case .helpSessionRequest: return "help.session.request"
         case .unsupported(_, let rawKind): return rawKind
         }
     }
@@ -127,6 +131,8 @@ enum RemoteWireMessageCodec {
         case .snapDelivery(_, let payload):
             return try jsonEncoder.encode(payload)
         case .clickConfirmation(_, let payload):
+            return try jsonEncoder.encode(payload)
+        case .helpSessionRequest(_, let payload):
             return try jsonEncoder.encode(payload)
         case .unsupported:
             return Data("{}".utf8)

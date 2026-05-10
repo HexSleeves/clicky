@@ -37,6 +37,7 @@ enum RemoteWireMessage: Equatable {
     case snapRequest(envelope: RemoteWireEnvelope, payload: SnapRequest)
     case snapDelivery(envelope: RemoteWireEnvelope, payload: SnapDelivery)
     case clickConfirmation(envelope: RemoteWireEnvelope, payload: ClickConfirmation)
+    case helpSessionRequest(envelope: RemoteWireEnvelope, payload: HelpSessionRequest)
     case unsupported(envelope: RemoteWireEnvelope, rawKind: String)
 
     var envelope: RemoteWireEnvelope {
@@ -45,6 +46,7 @@ enum RemoteWireMessage: Equatable {
         case .snapRequest(let envelope, _): return envelope
         case .snapDelivery(let envelope, _): return envelope
         case .clickConfirmation(let envelope, _): return envelope
+        case .helpSessionRequest(let envelope, _): return envelope
         case .unsupported(let envelope, _): return envelope
         }
     }
@@ -124,6 +126,15 @@ struct SnapDelivery: Codable, Equatable {
     /// Zero-indexed senior screen this snap came from. Mirrors the
     /// CursorCommand.screenIndex space so click translation lines up.
     let screenIndex: Int
+}
+
+/// Kid -> senior. Triggers the consent dialog on the senior's Mac.
+///
+/// Carries the kid's display name so the senior dialog reads
+/// "<name> wants to help on your screen." Sent the moment the kid
+/// presses "Help Mom" in the panel.
+struct HelpSessionRequest: Codable, Equatable {
+    let kidDisplayName: String
 }
 
 /// Bidirectional. Records that a click action was confirmed (or rejected).
