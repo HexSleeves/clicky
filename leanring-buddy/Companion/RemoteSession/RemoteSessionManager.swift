@@ -190,6 +190,20 @@ final class RemoteSessionManager: ObservableObject {
         transport?.send(message)
     }
 
+    /// Kid side: ask the senior to start a help session. Senior side
+    /// picks this up via `onIncomingHelpSessionRequest` and presents
+    /// the consent dialog with the kid's display name.
+    func sendHelpSessionRequest(_ payload: HelpSessionRequest) {
+        // Help-session-request is the bootstrap message — fire it any
+        // time, including before the local state machine moves into
+        // .active, because the senior side hasn't agreed yet.
+        let message = RemoteWireMessage.helpSessionRequest(
+            envelope: RemoteWireEnvelope(),
+            payload: payload
+        )
+        transport?.send(message)
+    }
+
     // MARK: - Inbound dispatch (kid-facing hooks)
 
     /// Hook the kid-side preview window subscribes to so it gets each
@@ -197,9 +211,14 @@ final class RemoteSessionManager: ObservableObject {
     /// composition wiring.
     var onIncomingSnapDelivery: ((SnapDelivery) -> Void)?
 
-    /// Hook the senior side could subscribe to if it wanted to mirror
-    /// kid-driven CursorCommands locally (debug / loopback). Optional.
+    /// Hook the senior side subscribes to so each kid click flies the
+    /// blue cursor overlay to the named pixel.
     var onIncomingCursorCommand: ((CursorCommand) -> Void)?
+
+    /// Hook the senior side subscribes to so the kid's "Help Mom"
+    /// trigger drives the consent dialog. Always carries the kid's
+    /// display name so the headline reads naturally.
+    var onIncomingHelpSessionRequest: ((HelpSessionRequest) -> Void)?
 
     // MARK: - Inbound dispatch
 
@@ -208,12 +227,18 @@ final class RemoteSessionManager: ObservableObject {
     private(set) var lastReceivedMessage: RemoteWireMessage?
 
     private func handleIncoming(_ message: RemoteWireMessage) {
-        guard case .active = state else { return }
         lastReceivedMessage = message
         switch message {
+        case .helpSessionRequest(_, let payload):
+            // Always dispatch — even when state == .idle — because the
+            // help-session-request IS what drives senior into
+            // .awaitingConsent in the first place.
+            onIncomingHelpSessionRequest?(payload)
         case .snapDelivery(_, let payload):
+            guard case .active = state else { return }
             onIncomingSnapDelivery?(payload)
         case .cursorCommand(_, let payload):
+            guard case .active = state else { return }
             onIncomingCursorCommand?(payload)
         case .snapRequest, .clickConfirmation, .unsupported:
             break

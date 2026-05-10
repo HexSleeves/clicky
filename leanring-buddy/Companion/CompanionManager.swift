@@ -119,6 +119,23 @@ final class CompanionManager: ObservableObject {
     /// wired in `wireRemoteHelpSurfaces()`.
     lazy var kidSidePreviewWindowController = KidSidePreviewWindowController()
 
+    /// Active relay transport — built lazily once a pair token lands,
+    /// torn down when the session ends. Polling-based today; swap in
+    /// RTCPeerConnection-backed transport later without touching call
+    /// sites.
+    private var activeRelayTransport: PollingRelayTransport?
+
+    /// Senior-side snap streaming timer. Captures a fresh HEIC snap of
+    /// the cursor screen every `snapStreamIntervalSeconds` while
+    /// remoteSessionManager.state == .active.
+    private var snapStreamingTask: Task<Void, Never>?
+    private let snapStreamIntervalSeconds: TimeInterval = 1.0
+
+    /// Combine subscriptions for Phase 1 remote-help wiring. Held so
+    /// they survive across the manager's lifetime.
+    private var pairedTokenObservation: AnyCancellable?
+    private var remoteSessionStateObservation: AnyCancellable?
+
     /// Persistent user-supplied memory. Surfaced into Claude's system prompt so
     /// every conversation starts with the user's saved context.
     let notesStore = NotesStore()
@@ -394,6 +411,153 @@ final class CompanionManager: ObservableObject {
             self.kidSidePreviewWindowController.showWindow()
             self.kidSidePreviewWindowController.renderSnapDelivery(snapDelivery)
         }
+
+        // Senior side: incoming CursorCommand → fly the existing blue
+        // cursor overlay to the named pixel on the named screen.
+        remoteSessionManager.onIncomingCursorCommand = { [weak self] cursorCommand in
+            self?.flyOverlayCursor(forIncomingCursorCommand: cursorCommand)
+        }
+
+        // Bridge: when pairing succeeds (pairedPeerToken transitions to
+        // a non-nil value) we attach a polling relay transport so wire
+        // messages can flow without WebRTC. Senior-side incoming
+        // HelpSessionRequest auto-triggers the consent dialog.
+        pairedTokenObservation = pairingManager.$pairedPeerToken
+            .removeDuplicates()
+            .sink { [weak self] token in
+                self?.handlePairedTokenChange(newToken: token)
+            }
+
+        // Senior side: spin up the snap-streaming timer when state
+        // transitions to .active; tear it down on any other state.
+        remoteSessionStateObservation = remoteSessionManager.$state
+            .removeDuplicates()
+            .sink { [weak self] state in
+                self?.handleRemoteSessionStateChange(newState: state)
+            }
+    }
+
+    /// Senior-side helper. Lights up the polling relay transport and,
+    /// if this is the senior, listens for an incoming
+    /// HelpSessionRequest to drive the consent dialog. Kid-side
+    /// transport is the same shape — kid presses "Help Mom" later to
+    /// actually send the request.
+    private func handlePairedTokenChange(newToken sessionToken: String?) {
+        guard let sessionToken,
+              let pairId = pairingManager.activePairId else {
+            // Pair was cleared (reset / unpair). Tear down any active
+            // transport.
+            activeRelayTransport?.teardown()
+            activeRelayTransport = nil
+            return
+        }
+
+        // If we already have a transport for this token, no-op.
+        if activeRelayTransport != nil { return }
+
+        let role: PollingRelayTransport.Role =
+            roleManager.shouldShowSeniorSurfaces ? .senior : .kid
+        let transport = PollingRelayTransport(
+            workerBaseURLString: Self.workerBaseURL,
+            pairId: pairId,
+            sessionToken: sessionToken,
+            role: role
+        )
+        remoteSessionManager.attachTransport(transport)
+        activeRelayTransport = transport
+
+        // Wire the senior-side help-session-request handler BEFORE
+        // starting the poll loop so we don't miss the very first
+        // message after kid presses "Help Mom".
+        remoteSessionManager.onIncomingHelpSessionRequest = { [weak self] request in
+            guard let self,
+                  self.roleManager.shouldShowSeniorSurfaces else { return }
+            self.respondToIncomingRemoteHelpRequest(
+                kidDisplayName: request.kidDisplayName
+            )
+        }
+        transport.startPolling()
+    }
+
+    /// Kid-side trigger. Called by the panel "Help Mom" button.
+    /// Sends a HelpSessionRequest wire message to the senior's mailbox;
+    /// the senior side picks it up and presents the consent dialog.
+    func requestHelpFromPairedSenior() {
+        guard pairingManager.pairedPeerToken != nil else { return }
+        // Move our local state so subsequent wire sends are accepted.
+        remoteSessionManager.requestSession()
+        // Also acquire ourselves so the kid-side audio coordinator
+        // mirrors the active state for AudioSessionOwner integrity.
+        remoteSessionManager.handleConsent(.accepted)
+
+        let helpSessionRequest = HelpSessionRequest(
+            kidDisplayName: NSFullUserName().isEmpty ? "Your kid" : NSFullUserName()
+        )
+        remoteSessionManager.sendHelpSessionRequest(helpSessionRequest)
+    }
+
+    /// Senior side: fly the existing blue cursor overlay to the
+    /// pixel point inside the named screen. Pixel → AppKit-point
+    /// conversion respects backingScaleFactor; AppKit Y axis flip
+    /// happens here so callers downstream see screen.frame-aligned
+    /// global coordinates.
+    private func flyOverlayCursor(forIncomingCursorCommand cursorCommand: CursorCommand) {
+        let allScreens = NSScreen.screens
+        guard cursorCommand.screenIndex >= 0,
+              cursorCommand.screenIndex < allScreens.count else { return }
+        let targetScreen = allScreens[cursorCommand.screenIndex]
+        let backingScale = max(1, targetScreen.backingScaleFactor)
+
+        let pointXInScreen = cursorCommand.x / backingScale
+        let pointYFromTopInScreen = cursorCommand.y / backingScale
+
+        let globalX = targetScreen.frame.origin.x + pointXInScreen
+        // AppKit Y axis flip: pixelY measured top-down → AppKit point Y measured bottom-up.
+        let globalY = targetScreen.frame.origin.y
+            + targetScreen.frame.height
+            - pointYFromTopInScreen
+
+        detectedElementScreenLocation = CGPoint(x: globalX, y: globalY)
+        detectedElementDisplayFrame = targetScreen.frame
+        detectedElementBubbleText = cursorCommand.label
+    }
+
+    /// Senior side: kick off / tear down the snap streaming timer
+    /// based on remote session state.
+    private func handleRemoteSessionStateChange(newState: RemoteSessionManager.State) {
+        switch newState {
+        case .active where roleManager.shouldShowSeniorSurfaces:
+            startSnapStreaming()
+        case .idle, .ending:
+            stopSnapStreaming()
+        case .active, .awaitingConsent:
+            // .active on kid side and .awaitingConsent on either side
+            // do nothing here — the kid's incoming snaps come via the
+            // existing onIncomingSnapDelivery hook.
+            break
+        }
+    }
+
+    private func startSnapStreaming() {
+        guard snapStreamingTask == nil else { return }
+        snapStreamingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                if case .active = self.remoteSessionManager.state {
+                    await self.captureAndDeliverSnapToKid()
+                } else {
+                    return
+                }
+                try? await Task.sleep(
+                    nanoseconds: UInt64(self.snapStreamIntervalSeconds * 1_000_000_000)
+                )
+            }
+        }
+    }
+
+    private func stopSnapStreaming() {
+        snapStreamingTask?.cancel()
+        snapStreamingTask = nil
     }
 
     /// Senior side: capture the cursor screen, encode HEIC, ship the
