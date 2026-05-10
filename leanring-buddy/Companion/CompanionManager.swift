@@ -89,7 +89,6 @@ final class CompanionManager: ObservableObject {
     // MARK: - Onboarding Music
 
     private let onboardingMusicPlayer = OnboardingMusicPlayer()
-    private var fallbackSpeechSynthesizer: AVSpeechSynthesizer?
 
     let buddyDictationManager = BuddyDictationManager()
     let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
@@ -111,8 +110,8 @@ final class CompanionManager: ObservableObject {
         return ClaudeAPI(proxyURL: "\(Self.workerBaseURL)/chat", model: selectedModel)
     }()
 
-    private lazy var elevenLabsTTSClient: ElevenLabsTTSClient = {
-        return ElevenLabsTTSClient(proxyURL: "\(Self.workerBaseURL)/tts")
+    private lazy var speechPipeline: SpeechPipeline = {
+        return SpeechPipeline(workerBaseURL: Self.workerBaseURL)
     }()
 
     /// One round-trip exchange retained for in-session memory. Surfaced
@@ -649,8 +648,7 @@ final class CompanionManager: ObservableObject {
 
             // Cancel any in-progress response and TTS from a previous utterance
             currentResponseTask?.cancel()
-            elevenLabsTTSClient.stopPlayback()
-            fallbackSpeechSynthesizer?.stopSpeaking(at: .immediate)
+            speechPipeline.stop()
             clearDetectedElementLocation()
 
             // Dismiss the onboarding prompt if it's showing
@@ -710,8 +708,7 @@ final class CompanionManager: ObservableObject {
 
             NotificationCenter.default.post(name: .miloDismissPanel, object: nil)
             currentResponseTask?.cancel()
-            elevenLabsTTSClient.stopPlayback()
-            fallbackSpeechSynthesizer?.stopSpeaking(at: .immediate)
+            speechPipeline.stop()
             voiceState = .idle
             clearDetectedElementLocation()
             dismissOnboardingPromptIfNeeded()
@@ -739,15 +736,7 @@ final class CompanionManager: ObservableObject {
     }
 
     private func dismissOnboardingPromptIfNeeded() {
-        guard showOnboardingPrompt else { return }
-
-        withAnimation(.easeOut(duration: 0.3)) {
-            onboardingPromptOpacity = 0.0
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            self.showOnboardingPrompt = false
-            self.onboardingPromptText = ""
-        }
+        onboardingController.dismissPromptIfVisible()
     }
 
     private func submitTypedMessage(_ typedMessage: String, attachments: [Data] = []) {
@@ -784,18 +773,15 @@ final class CompanionManager: ObservableObject {
         print("📝 Saved note: \(savedNote.text)")
 
         currentResponseTask?.cancel()
-        elevenLabsTTSClient.stopPlayback()
-        fallbackSpeechSynthesizer?.stopSpeaking(at: .immediate)
+        speechPipeline.stop()
         guidedActionProposal = nil
         detectedElementBubbleText = nil
 
         let confirmationText = "saved."
         Task { @MainActor in
-            do {
-                try await elevenLabsTTSClient.speakText(confirmationText)
+            let outcome = await speechPipeline.speak(confirmationText)
+            if case .skippedEmpty = outcome {} else {
                 voiceState = .responding
-            } catch {
-                speakSystemVoiceFallback(confirmationText)
             }
             if !Task.isCancelled {
                 voiceState = .idle
@@ -819,8 +805,7 @@ final class CompanionManager: ObservableObject {
         userAttachments: [Data] = []
     ) {
         currentResponseTask?.cancel()
-        elevenLabsTTSClient.stopPlayback()
-        fallbackSpeechSynthesizer?.stopSpeaking(at: .immediate)
+        speechPipeline.stop()
         guidedActionProposal = nil
         detectedElementBubbleText = nil
 
@@ -899,30 +884,18 @@ final class CompanionManager: ObservableObject {
 
                 if let pointCoordinate = parseResult.coordinate,
                    let targetScreenCapture {
-                    // Claude's coordinates are in the screenshot's pixel space
-                    // (top-left origin, e.g. 1280x831). Scale to the display's
-                    // point space (e.g. 1512x982), then convert to AppKit global coords.
-                    let screenshotWidth = CGFloat(targetScreenCapture.screenshotWidthInPixels)
-                    let screenshotHeight = CGFloat(targetScreenCapture.screenshotHeightInPixels)
-                    let displayWidth = CGFloat(targetScreenCapture.displayWidthInPoints)
-                    let displayHeight = CGFloat(targetScreenCapture.displayHeightInPoints)
                     let displayFrame = targetScreenCapture.displayFrame
-
-                    // Clamp to screenshot coordinate space
-                    let clampedX = max(0, min(pointCoordinate.x, screenshotWidth))
-                    let clampedY = max(0, min(pointCoordinate.y, screenshotHeight))
-
-                    // Scale from screenshot pixels to display points
-                    let displayLocalX = clampedX * (displayWidth / screenshotWidth)
-                    let displayLocalY = clampedY * (displayHeight / screenshotHeight)
-
-                    // Convert from top-left origin (screenshot) to bottom-left origin (AppKit)
-                    let appKitY = displayHeight - displayLocalY
-
-                    // Convert display-local coords to global screen coords
-                    let globalLocation = CGPoint(
-                        x: displayLocalX + displayFrame.origin.x,
-                        y: appKitY + displayFrame.origin.y
+                    let globalLocation = CoordinateTranslator.screenshotPointToAppKitGlobal(
+                        screenshotPoint: pointCoordinate,
+                        screenshotSize: CGSize(
+                            width: CGFloat(targetScreenCapture.screenshotWidthInPixels),
+                            height: CGFloat(targetScreenCapture.screenshotHeightInPixels)
+                        ),
+                        displaySize: CGSize(
+                            width: CGFloat(targetScreenCapture.displayWidthInPoints),
+                            height: CGFloat(targetScreenCapture.displayHeightInPoints)
+                        ),
+                        displayFrame: displayFrame
                     )
 
                     detectedElementScreenLocation = globalLocation
@@ -974,25 +947,27 @@ final class CompanionManager: ObservableObject {
                 MiloAnalytics.trackAIResponseReceived(response: spokenText)
                 incrementMonthlyAgentMessageCount()
 
-                // Play the response via TTS. Keep the spinner (processing state)
-                // until the audio actually starts playing, then switch to responding.
-                if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    do {
-                        try await elevenLabsTTSClient.speakText(spokenText)
-                        // speakText returns after player.play() — audio is now playing
-                        voiceState = .responding
-                    } catch {
-                        MiloAnalytics.trackTTSError(error: error.localizedDescription)
-                        print("⚠️ ElevenLabs unavailable, using system voice: \(error.localizedDescription)")
-                        speakSystemVoiceFallback(spokenText)
-                    }
+                // Play the response via speech pipeline (ElevenLabs primary,
+                // system fallback on failure). Switch to responding once
+                // playback has actually started.
+                let speakOutcome = await speechPipeline.speak(spokenText)
+                switch speakOutcome {
+                case .elevenLabs, .systemFallback:
+                    voiceState = .responding
+                case .skippedEmpty:
+                    break
+                }
+                if case let .systemFallback(error) = speakOutcome {
+                    MiloAnalytics.trackTTSError(error: error.localizedDescription)
+                    print("⚠️ ElevenLabs unavailable, using system voice: \(error.localizedDescription)")
                 }
             } catch is CancellationError {
                 // User spoke again — response was interrupted
             } catch {
                 MiloAnalytics.trackResponseError(error: error.localizedDescription)
                 print("⚠️ Companion response error: \(error)")
-                speakSystemVoiceFallback("I hit an error while trying to answer that.")
+                _ = await speechPipeline.speak("I hit an error while trying to answer that.")
+                voiceState = .responding
             }
 
             if !Task.isCancelled {
@@ -1012,7 +987,7 @@ final class CompanionManager: ObservableObject {
         transientHideTask?.cancel()
         transientHideTask = Task {
             // Wait for TTS audio to finish playing
-            while elevenLabsTTSClient.isPlaying {
+            while speechPipeline.isPlaying {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard !Task.isCancelled else { return }
             }
@@ -1032,19 +1007,6 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// Uses macOS system TTS when ElevenLabs is unavailable.
-    /// Uses AVSpeechSynthesizer (replacement for the deprecated NSSpeechSynthesizer).
-    private func speakSystemVoiceFallback(_ text: String) {
-        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedText.isEmpty else { return }
-
-        fallbackSpeechSynthesizer?.stopSpeaking(at: .immediate)
-        let synthesizer = AVSpeechSynthesizer()
-        fallbackSpeechSynthesizer = synthesizer
-        let utterance = AVSpeechUtterance(string: trimmedText)
-        synthesizer.speak(utterance)
-        voiceState = .responding
-    }
 
     // MARK: - Point Tag Parsing
 
@@ -1143,20 +1105,18 @@ final class CompanionManager: ObservableObject {
                     return
                 }
 
-                let screenshotWidth = CGFloat(cursorScreenCapture.screenshotWidthInPixels)
-                let screenshotHeight = CGFloat(cursorScreenCapture.screenshotHeightInPixels)
-                let displayWidth = CGFloat(cursorScreenCapture.displayWidthInPoints)
-                let displayHeight = CGFloat(cursorScreenCapture.displayHeightInPoints)
                 let displayFrame = cursorScreenCapture.displayFrame
-
-                let clampedX = max(0, min(pointCoordinate.x, screenshotWidth))
-                let clampedY = max(0, min(pointCoordinate.y, screenshotHeight))
-                let displayLocalX = clampedX * (displayWidth / screenshotWidth)
-                let displayLocalY = clampedY * (displayHeight / screenshotHeight)
-                let appKitY = displayHeight - displayLocalY
-                let globalLocation = CGPoint(
-                    x: displayLocalX + displayFrame.origin.x,
-                    y: appKitY + displayFrame.origin.y
+                let globalLocation = CoordinateTranslator.screenshotPointToAppKitGlobal(
+                    screenshotPoint: pointCoordinate,
+                    screenshotSize: CGSize(
+                        width: CGFloat(cursorScreenCapture.screenshotWidthInPixels),
+                        height: CGFloat(cursorScreenCapture.screenshotHeightInPixels)
+                    ),
+                    displaySize: CGSize(
+                        width: CGFloat(cursorScreenCapture.displayWidthInPoints),
+                        height: CGFloat(cursorScreenCapture.displayHeightInPoints)
+                    ),
+                    displayFrame: displayFrame
                 )
 
                 // Set custom bubble text so the pointing animation uses Claude's
