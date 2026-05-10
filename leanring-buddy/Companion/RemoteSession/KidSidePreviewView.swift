@@ -35,46 +35,63 @@ struct KidSidePreviewView: View {
 
     var body: some View {
         GeometryReader { proxy in
+            let containerSize = proxy.size
+            let imageDisplayedRect: CGRect = currentSnapImage.map { image in
+                aspectFitRect(
+                    imageNativeSize: image.size,
+                    containerSize: containerSize
+                )
+            } ?? .zero
+
             ZStack {
                 Color.black
 
                 if let currentSnapImage {
-                    // Compute the displayed-image rect inside our
-                    // bounds for the click translator. SwiftUI's
-                    // .scaledToFit centers the image; we mirror the
-                    // same math so the translator sees exactly the
-                    // rect we render.
-                    let containerSize = proxy.size
-                    let imageNativeSize = currentSnapImage.size
-                    let imageDisplayedRect = aspectFitRect(
-                        imageNativeSize: imageNativeSize,
-                        containerSize: containerSize
-                    )
-
                     Image(nsImage: currentSnapImage)
                         .resizable()
                         .scaledToFit()
-                        .gesture(
-                            DragGesture(minimumDistance: 0)
-                                .onEnded { gestureValue in
-                                    let translation = PreviewClickTranslator.translate(
-                                        PreviewClickTranslationInput(
-                                            clickInWindowPoints: gestureValue.location,
-                                            imageDisplayedRectInWindowPoints: imageDisplayedRect,
-                                            seniorScreenPixelSize: seniorScreenPixelSize,
-                                            seniorScreenIndex: seniorScreenIndex
-                                        )
-                                    )
-                                    onClickInSeniorPixelSpace(translation)
-                                }
-                        )
                 } else {
                     Text("Waiting for the first frame…")
                         .foregroundColor(.white.opacity(0.6))
                 }
             }
+            // Make the WHOLE container clickable (not just the image)
+            // so a click in the letterbox margin still produces a
+            // useful "missed" event upstream — without this the
+            // gesture only fires on the Image's own bounds.
+            .contentShape(Rectangle())
+            .coordinateSpace(name: Self.gestureCoordinateSpaceName)
+            .gesture(
+                // SwiftUI's default gesture coordinate space is the
+                // gestured view's LOCAL bounds. Image's local bounds
+                // are the aspect-fit rect — which means location
+                // origin is the image's top-left, NOT the container's.
+                // imageDisplayedRect is in container coords, so the
+                // translator's offset subtraction was double-counting
+                // the letterbox and snapping clicks to the top edge.
+                // Pinning the gesture to a NAMED space matching the
+                // ZStack's frame puts gesture.location into container
+                // coords, and the translator's math is correct.
+                DragGesture(
+                    minimumDistance: 0,
+                    coordinateSpace: .named(Self.gestureCoordinateSpaceName)
+                )
+                .onEnded { gestureValue in
+                    let translation = PreviewClickTranslator.translate(
+                        PreviewClickTranslationInput(
+                            clickInWindowPoints: gestureValue.location,
+                            imageDisplayedRectInWindowPoints: imageDisplayedRect,
+                            seniorScreenPixelSize: seniorScreenPixelSize,
+                            seniorScreenIndex: seniorScreenIndex
+                        )
+                    )
+                    onClickInSeniorPixelSpace(translation)
+                }
+            )
         }
     }
+
+    private static let gestureCoordinateSpaceName = "kid-preview-container"
 }
 
 /// Pure helper used by both the view and its tests. Computes the
