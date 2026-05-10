@@ -44,7 +44,12 @@ const PAIR_CODE_EXPIRY_MS = 5 * 60 * 1000;
 const MAX_WRONG_ATTEMPTS = 5;
 
 export type SignalRole = "kid" | "senior";
-export type SignalKind = "offer" | "answer" | "ice" | "stop";
+/// Lane B signal kinds. "offer" / "answer" / "ice" / "stop" are the
+/// WebRTC handshake messages from the original design. "wire" is the
+/// catch-all relay for the v1 RemoteWireMessage envelope (CursorCommand,
+/// SnapDelivery, HelpSessionRequest, etc.) so the polling-relay
+/// transport can ride on the same DO mailboxes until WebRTC ships.
+export type SignalKind = "offer" | "answer" | "ice" | "stop" | "wire";
 
 export interface SignalMessage {
   from: SignalRole;
@@ -360,7 +365,8 @@ export class PairingSessionDO implements DurableObject {
       requestBody.kind !== "offer" &&
       requestBody.kind !== "answer" &&
       requestBody.kind !== "ice" &&
-      requestBody.kind !== "stop"
+      requestBody.kind !== "stop" &&
+      requestBody.kind !== "wire"
     ) {
       return jsonResponse({ error: "invalid `kind`" }, 400);
     }

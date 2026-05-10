@@ -42,7 +42,7 @@ async function pairUpForTesting(): Promise<PairedSession> {
 async function callSignalSend(
   session: PairedSession,
   from: "kid" | "senior",
-  kind: "offer" | "answer" | "ice" | "stop",
+  kind: "offer" | "answer" | "ice" | "stop" | "wire",
   data: unknown,
 ): Promise<{ status: number; body: SignalSendResponseBody }> {
   const sendResponse = await SELF.fetch(
@@ -253,6 +253,34 @@ describe("auth & replay defense", () => {
     const replayVerifyOutcome =
       (await replayVerifyResponse.json()) as VerifyResponseBody;
     expect(replayVerifyOutcome.outcome).toBe("codeExpired");
+  });
+});
+
+describe("wire kind (polling-relay support)", () => {
+  it("accepts kind=wire and round-trips the data payload through the inbox", async () => {
+    const session = await pairUpForTesting();
+    const wireEnvelopePayload = {
+      v: 1,
+      kind: "cursor.command",
+      id: "11111111-2222-3333-4444-555555555555",
+      ts: 1_736_400_000_000,
+      data: { x: 100, y: 200, screenIndex: 0, label: null },
+    };
+    const sendOutcome = await callSignalSend(
+      session,
+      "kid",
+      "wire",
+      wireEnvelopePayload,
+    );
+    expect(sendOutcome).toEqual({ status: 200, body: { outcome: "ok" } });
+
+    const pollOutcome = await callSignalPoll(session, "senior");
+    if (pollOutcome.body.outcome !== "ok") {
+      expect.fail("expected ok");
+    }
+    expect(pollOutcome.body.messages).toHaveLength(1);
+    expect(pollOutcome.body.messages[0].kind).toBe("wire");
+    expect(pollOutcome.body.messages[0].data).toEqual(wireEnvelopePayload);
   });
 });
 
