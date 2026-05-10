@@ -162,6 +162,13 @@ final class PairingManager: ObservableObject {
                 expiresAt: mintResponse.expiresAt
             )
             self.activePairId = mintResponse.pairId
+            // Worker pre-mints the session token at /pair/generate so
+            // the kid has relay auth from t=0. Storing it as
+            // pairedPeerToken kicks the panel into "Paired ✓" and
+            // triggers CompanionManager's transport-attach hook the
+            // moment the code is minted — without this the kid sat
+            // unauthorised even after the senior verified.
+            self.pairedPeerToken = mintResponse.sessionToken
         } catch let error as PairingNetworkError {
             lastNetworkError = error
         } catch {

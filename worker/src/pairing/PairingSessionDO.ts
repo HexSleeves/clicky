@@ -74,6 +74,11 @@ interface PairingDOState {
 export interface InitResponseBody {
   code: string;
   expiresAt: number;
+  /// Pre-minted at /init so the kid (who doesn't go through /verify)
+  /// can authenticate against the relay endpoints immediately. The
+  /// senior receives the SAME token from /verify on success — both
+  /// sides now share auth from t=0.
+  sessionToken: string;
 }
 
 export type VerifyResponseBody =
@@ -154,17 +159,20 @@ export class PairingSessionDO implements DurableObject {
       const responseBody: InitResponseBody = {
         code: existingState.code,
         expiresAt: existingState.expiresAt,
+        sessionToken: existingState.sessionToken
+          ?? generateRandomSessionToken(),
       };
       return jsonResponse(responseBody, 200);
     }
 
     const issuedAt = Date.now();
+    const preMintedSessionToken = generateRandomSessionToken();
     const newPairingState: PairingDOState = {
       code: generateRandom6DigitCode(),
       issuedAt,
       expiresAt: issuedAt + PAIR_CODE_EXPIRY_MS,
       wrongAttemptCount: 0,
-      sessionToken: null,
+      sessionToken: preMintedSessionToken,
       sessionTokenConsumed: false,
       sessionActivated: false,
       endedAt: null,
@@ -176,6 +184,7 @@ export class PairingSessionDO implements DurableObject {
     const responseBody: InitResponseBody = {
       code: newPairingState.code,
       expiresAt: newPairingState.expiresAt,
+      sessionToken: preMintedSessionToken,
     };
     return jsonResponse(responseBody, 201);
   }

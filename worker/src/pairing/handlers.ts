@@ -25,6 +25,11 @@ export interface GenerateResponseBody {
   pairId: string;
   code: string;
   expiresAt: number;
+  /// Pre-minted at /pair/generate so the kid can authenticate against
+  /// the relay endpoints (/signal/:pairId/{send,poll}) immediately,
+  /// without waiting on the senior's /pair/verify round-trip. The
+  /// senior receives the SAME token from /pair/verify on success.
+  sessionToken: string;
 }
 
 export async function handlePairGenerate(
@@ -51,6 +56,7 @@ export async function handlePairGenerate(
     pairId: newPairId.toString(),
     code: initBody.code,
     expiresAt: initBody.expiresAt,
+    sessionToken: initBody.sessionToken,
   };
   return new Response(JSON.stringify(responseBody), {
     status: 201,

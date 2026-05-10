@@ -20,6 +20,10 @@ struct PairCodeMintResponse: Equatable {
     let pairId: String
     let code: String
     let expiresAt: Date
+    /// Pre-minted by the Worker at /pair/generate time so the kid has
+    /// relay auth from t=0. The senior receives the same token from
+    /// /pair/verify on success — both sides share one secret.
+    let sessionToken: String
 }
 
 enum PairCodeVerificationOutcome: Equatable {
@@ -105,13 +109,15 @@ final class PairingNetworkClient {
         let parsed = (try? JSONSerialization.jsonObject(with: responseData)) as? [String: Any]
         guard let pairId = parsed?["pairId"] as? String,
               let code = parsed?["code"] as? String,
-              let expiresAtMillis = (parsed?["expiresAt"] as? NSNumber)?.doubleValue else {
+              let expiresAtMillis = (parsed?["expiresAt"] as? NSNumber)?.doubleValue,
+              let sessionToken = parsed?["sessionToken"] as? String else {
             throw PairingNetworkError.malformedResponse
         }
         return PairCodeMintResponse(
             pairId: pairId,
             code: code,
-            expiresAt: Date(timeIntervalSince1970: expiresAtMillis / 1000)
+            expiresAt: Date(timeIntervalSince1970: expiresAtMillis / 1000),
+            sessionToken: sessionToken
         )
     }
 
