@@ -136,6 +136,17 @@ final class CompanionManager: ObservableObject {
     private var pairedTokenObservation: AnyCancellable?
     private var remoteSessionStateObservation: AnyCancellable?
 
+    /// Forwarded objectWillChange streams from the nested
+    /// ObservableObjects we own. SwiftUI's @ObservedObject only watches
+    /// the directly-bound object, so without this any view that reads
+    /// `companionManager.pairingManager.pairedPeerToken` (or similar
+    /// nested @Published) does NOT refresh when the inner field
+    /// changes — symptom: footer "Pair" pill failed to flip to
+    /// "Paired ✓" after the kid minted a code. Bubbling each child's
+    /// objectWillChange through self.objectWillChange is the
+    /// standard fix.
+    private var nestedObservableSubscriptions: [AnyCancellable] = []
+
     /// Persistent user-supplied memory. Surfaced into Claude's system prompt so
     /// every conversation starts with the user's saved context.
     let notesStore = NotesStore()
@@ -354,6 +365,7 @@ final class CompanionManager: ObservableObject {
         bindShortcutTransitions()
         wireAudioSessionCoordination()
         wireRemoteHelpSurfaces()
+        forwardNestedObservableChanges()
         // Eagerly touch the Claude API so its TLS warmup handshake completes
         // well before the onboarding demo fires at ~40s into the video.
         _ = claudeAPI
@@ -558,6 +570,27 @@ final class CompanionManager: ObservableObject {
     private func stopSnapStreaming() {
         snapStreamingTask?.cancel()
         snapStreamingTask = nil
+    }
+
+    /// Re-publishes child ObservableObject changes through self so views
+    /// observing CompanionManager pick up nested @Published edits. Each
+    /// child's objectWillChange piped to self.objectWillChange.send().
+    private func forwardNestedObservableChanges() {
+        let childObjects: [any ObservableObject] = [
+            roleManager,
+            pairingManager,
+            blocklistMonitor,
+            audioSessionCoordinator,
+            remoteSessionManager
+        ]
+        nestedObservableSubscriptions = childObjects.compactMap { childObject in
+            guard let publisher = (childObject.objectWillChange as any Publisher) as? ObservableObjectPublisher else {
+                return nil
+            }
+            return publisher.sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+        }
     }
 
     /// Senior side: capture the cursor screen, encode HEIC, ship the
