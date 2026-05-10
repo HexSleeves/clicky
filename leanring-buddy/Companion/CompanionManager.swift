@@ -102,8 +102,10 @@ final class CompanionManager: ObservableObject {
     let audioSessionCoordinator = AudioSessionCoordinator()
     let roleManager = RoleManager()
     let pairingManager = PairingManager()
+    let blocklistMonitor = BlocklistMonitor()
     lazy var remoteSessionManager: RemoteSessionManager = RemoteSessionManager(
-        audioSessionCoordinator: audioSessionCoordinator
+        audioSessionCoordinator: audioSessionCoordinator,
+        blocklistMonitor: blocklistMonitor
     )
 
     /// Persistent user-supplied memory. Surfaced into Claude's system prompt so
@@ -351,6 +353,35 @@ final class CompanionManager: ObservableObject {
             if previousOwner == .pushToTalk {
                 self.buddyDictationManager.cancelCurrentDictation(preserveDraftText: true)
             }
+        }
+    }
+
+    /// Senior-mode helper: when the blocklist gate fires, speak a
+    /// friendly "I can't see this app right now" line via TTS and
+    /// reset state so Mom isn't stuck in the processing spinner.
+    /// Uses the same TTS path Claude responses use so the voice and
+    /// volume match.
+    private func speakBlockedAppNotice(displayReason: String) async {
+        // Spoken copy is intentionally short, plain, and reassuring —
+        // never blames the user. The displayReason ("banking app
+        // detected" etc.) flows in for parity with the kid-side
+        // banner, but the spoken version is gentler.
+        let blockedAppNotice = "i can't look at this one for safety. switch to a different window and ask me again."
+        voiceState = .responding
+        defer {
+            Task { @MainActor in
+                self.voiceState = .idle
+            }
+        }
+        do {
+            try await elevenLabsTTSClient.speakText(blockedAppNotice)
+        } catch {
+            // TTS failure isn't fatal — fall back to the system
+            // synthesizer so Mom still hears something.
+            let fallbackSynthesizer = AVSpeechSynthesizer()
+            let utterance = AVSpeechUtterance(string: blockedAppNotice)
+            fallbackSynthesizer.speak(utterance)
+            self.fallbackSpeechSynthesizer = fallbackSynthesizer
         }
     }
 
@@ -1049,6 +1080,19 @@ final class CompanionManager: ObservableObject {
             voiceState = .processing
 
             do {
+                // Senior-mode privacy gate: if Mom's frontmost app or
+                // active URL is on the thin blocklist (banking,
+                // password managers, health portals), DO NOT send a
+                // screenshot to Claude. Speak a friendly "I can't see
+                // this app" instead and bail.
+                if roleManager.shouldShowSeniorSurfaces {
+                    blocklistMonitor.evaluateNow()
+                    if case .blocked(let displayReason) = blocklistMonitor.currentOutcome {
+                        await speakBlockedAppNotice(displayReason: displayReason)
+                        return
+                    }
+                }
+
                 // Capture all connected screens so the AI has full context
                 let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
                 let isGuidedActionRequest = Self.isGuidedActionRequest(transcript)
