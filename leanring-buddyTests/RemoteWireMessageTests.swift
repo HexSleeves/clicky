@@ -22,7 +22,7 @@ struct RemoteWireMessageTests {
         )
         let original = RemoteWireMessage.cursorCommand(
             envelope: envelope,
-            payload: CursorCommand(x: 1024.5, y: 768.25, screenIndex: 1, label: "Click here")
+            payload: CursorCommand(xFraction: 0.5, yFraction: 0.75, screenIndex: 1, label: "Click here")
         )
 
         let encodedData = try RemoteWireMessageCodec.encode(original)
@@ -70,7 +70,7 @@ struct RemoteWireMessageTests {
           "id": "11111111-2222-3333-4444-555555555555",
           "ts": 1736400000000,
           "futureField": { "experimental": true },
-          "data": { "x": 100, "y": 200, "screenIndex": 0, "label": null }
+          "data": { "xFraction": 0.25, "yFraction": 0.5, "screenIndex": 0, "label": null }
         }
         """
 
@@ -80,7 +80,7 @@ struct RemoteWireMessageTests {
             Issue.record("Expected cursorCommand, got \(decodedMessage)")
             return
         }
-        #expect(payload.x == 100)
+        #expect(payload.xFraction == 0.25)
         #expect(payload.screenIndex == 0)
     }
 

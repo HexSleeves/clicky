@@ -36,10 +36,17 @@ export interface WireEnvelope {
   ts: number;
 }
 
-/** Kid -> senior: fly the cursor overlay to a point on a specific screen. */
+/**
+ * Kid -> senior: fly the cursor overlay to a point on a specific screen.
+ *
+ * Coordinates are 0..1 normalized fractions of the target screen
+ * (top-left origin, x rightward, y downward). Fractions sidestep
+ * every snap-vs-native-vs-Retina conversion mismatch — neither side
+ * has to know the other's pixel densities.
+ */
 export interface CursorCommandPayload {
-  x: number;
-  y: number;
+  xFraction: number;
+  yFraction: number;
   screenIndex: number;
   label?: string | null;
 }

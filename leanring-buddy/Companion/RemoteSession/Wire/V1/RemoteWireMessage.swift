@@ -69,17 +69,25 @@ struct RemoteWireEnvelope: Equatable {
     }
 }
 
-/// Kid -> senior. Asks the senior-side cursor overlay to fly to a point.
+/// Kid -> senior. Asks the senior-side cursor overlay to fly to a
+/// point on the named screen.
 ///
-/// Coordinates are in the senior's *device-pixel* space for the named
-/// screen (zero-indexed across `NSScreen.screens`). The kid app is
-/// responsible for translating from its preview-window coordinate space.
+/// Coordinates are 0..1 normalized FRACTIONS of the target screen
+/// (top-left origin, x rightward, y downward). Fractions sidestep
+/// every snap-vs-native-vs-Retina conversion mismatch — neither side
+/// has to know the other's pixel densities. The senior multiplies by
+/// its screen.frame width/height (in points) and applies the AppKit
+/// Y-flip to land on the right pixel.
+///
+/// (Earlier revisions wired this in pixel space and consistently
+/// landed the cursor at half the intended distance whenever the
+/// snap's downscaled-pixel dim differed from the senior's native
+/// pixel dim. Fractions remove that whole class of bugs.)
 struct CursorCommand: Codable, Equatable {
-    /// Target x in senior-side pixel coordinates (top-left origin within the
-    /// chosen screen).
-    let x: Double
-    /// Target y in senior-side pixel coordinates.
-    let y: Double
+    /// 0..1 fraction of the target screen's width.
+    let xFraction: Double
+    /// 0..1 fraction of the target screen's height.
+    let yFraction: Double
     /// Zero-indexed screen number on the senior's machine. Maps to
     /// `NSScreen.screens[screenIndex]`.
     let screenIndex: Int

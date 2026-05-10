@@ -264,7 +264,7 @@ describe("wire kind (polling-relay support)", () => {
       kind: "cursor.command",
       id: "11111111-2222-3333-4444-555555555555",
       ts: 1_736_400_000_000,
-      data: { x: 100, y: 200, screenIndex: 0, label: null },
+      data: { xFraction: 0.5, yFraction: 0.5, screenIndex: 0, label: null },
     };
     const sendOutcome = await callSignalSend(
       session,

@@ -408,8 +408,8 @@ final class CompanionManager: ObservableObject {
         kidSidePreviewWindowController.onClickInSeniorPixelSpace = { [weak self] translation in
             guard let self else { return }
             let cursorCommand = CursorCommand(
-                x: translation.seniorScreenPixelX,
-                y: translation.seniorScreenPixelY,
+                xFraction: translation.xFraction,
+                yFraction: translation.yFraction,
                 screenIndex: translation.seniorScreenIndex,
                 label: nil
             )
@@ -509,22 +509,28 @@ final class CompanionManager: ObservableObject {
     }
 
     /// Senior side: fly the existing blue cursor overlay to the
-    /// pixel point inside the named screen. Pixel → AppKit-point
-    /// conversion respects backingScaleFactor; AppKit Y axis flip
-    /// happens here so callers downstream see screen.frame-aligned
-    /// global coordinates.
+    /// 0..1-fraction point inside the named screen.
+    ///
+    /// Working in fractions removes every Retina / snap-downscale
+    /// scaling concern — the wire just describes "60% of the way
+    /// across, 40% of the way down" and we multiply by whatever
+    /// `screen.frame` is in points. AppKit Y flip happens here so
+    /// callers downstream see screen.frame-aligned global coords.
     private func flyOverlayCursor(forIncomingCursorCommand cursorCommand: CursorCommand) {
         let allScreens = NSScreen.screens
         guard cursorCommand.screenIndex >= 0,
               cursorCommand.screenIndex < allScreens.count else { return }
         let targetScreen = allScreens[cursorCommand.screenIndex]
-        let backingScale = max(1, targetScreen.backingScaleFactor)
 
-        let pointXInScreen = cursorCommand.x / backingScale
-        let pointYFromTopInScreen = cursorCommand.y / backingScale
+        let clampedXFraction = min(max(cursorCommand.xFraction, 0), 1)
+        let clampedYFraction = min(max(cursorCommand.yFraction, 0), 1)
+
+        let pointXInScreen = clampedXFraction * targetScreen.frame.width
+        let pointYFromTopInScreen = clampedYFraction * targetScreen.frame.height
 
         let globalX = targetScreen.frame.origin.x + pointXInScreen
-        // AppKit Y axis flip: pixelY measured top-down → AppKit point Y measured bottom-up.
+        // AppKit Y axis flip: y measured top-down on the wire,
+        // AppKit point Y measured bottom-up.
         let globalY = targetScreen.frame.origin.y
             + targetScreen.frame.height
             - pointYFromTopInScreen

@@ -140,7 +140,7 @@ struct RemoteSessionManagerTests {
         sessionManager.handleConsent(.accepted, now: referenceTime)
 
         sessionManager.sendCursorCommand(
-            CursorCommand(x: 200, y: 300, screenIndex: 0, label: "click here")
+            CursorCommand(xFraction: 0.4, yFraction: 0.6, screenIndex: 0, label: "click here")
         )
 
         #expect(inMemoryTransport.sentMessages.count == 1)
@@ -148,7 +148,7 @@ struct RemoteSessionManagerTests {
             Issue.record("Expected cursorCommand on the wire, got \(inMemoryTransport.sentMessages)")
             return
         }
-        #expect(payload.x == 200)
+        #expect(payload.xFraction == 0.4)
         #expect(payload.label == "click here")
     }
 
@@ -160,7 +160,7 @@ struct RemoteSessionManagerTests {
 
         // Never reached .active.
         sessionManager.sendCursorCommand(
-            CursorCommand(x: 1, y: 2, screenIndex: 0, label: nil)
+            CursorCommand(xFraction: 0.01, yFraction: 0.02, screenIndex: 0, label: nil)
         )
 
         #expect(inMemoryTransport.sentMessages.isEmpty)
