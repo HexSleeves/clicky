@@ -18,12 +18,6 @@ private final class KeyableTextInputPanel: NSPanel {
 final class CompanionTextInputPanelManager: NSObject {
     private var panel: NSPanel?
     private var clickOutsideMonitor: Any?
-    /// Watches mouse-moved events while the panel is visible so the chip
-    /// can track the cursor (or Milo's blue cursor) as it moves around.
-    /// Two monitors needed: global for when our app isn't key (rare while
-    /// typing), local for when it is.
-    private var globalMouseMoveMonitor: Any?
-    private var localMouseMoveMonitor: Any?
 
     private let panelWidth: CGFloat = 360
     private let panelHeight: CGFloat = 54
@@ -47,7 +41,6 @@ final class CompanionTextInputPanelManager: NSObject {
         panel?.makeKeyAndOrderFront(nil)
         panel?.orderFrontRegardless()
         installClickOutsideMonitor(onCancel: onCancel)
-        installMouseFollowMonitor()
     }
 
     func hide() {
@@ -55,7 +48,6 @@ final class CompanionTextInputPanelManager: NSObject {
         panel?.contentView = nil
         panel = nil
         removeClickOutsideMonitor()
-        removeMouseFollowMonitor()
     }
 
     private func createPanel(
@@ -99,9 +91,6 @@ final class CompanionTextInputPanelManager: NSObject {
         textInputPanel.isMovableByWindowBackground = false
         textInputPanel.titleVisibility = .hidden
         textInputPanel.titlebarAppearsTransparent = true
-        // Required so the panel delivers mouseMoved events to our local
-        // monitor while it's key (it's key whenever the user is typing).
-        textInputPanel.acceptsMouseMovedEvents = true
         textInputPanel.contentView = hostingView
 
         panel = textInputPanel
@@ -149,42 +138,6 @@ final class CompanionTextInputPanelManager: NSObject {
         }
     }
 
-    /// Repositions the panel near the cursor on every mouse move so the
-    /// chip "follows" the user's pointer (and Milo's blue cursor overlay
-    /// since they share a position). Both global + local monitors needed
-    /// because the panel takes key focus while typing.
-    private func installMouseFollowMonitor() {
-        removeMouseFollowMonitor()
-
-        let handler: () -> Void = { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.positionPanelNearCursor()
-            }
-        }
-
-        globalMouseMoveMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.mouseMoved]
-        ) { _ in handler() }
-
-        // Local monitor must return the event so the field still receives it.
-        localMouseMoveMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.mouseMoved]
-        ) { event in
-            handler()
-            return event
-        }
-    }
-
-    private func removeMouseFollowMonitor() {
-        if let globalMouseMoveMonitor {
-            NSEvent.removeMonitor(globalMouseMoveMonitor)
-            self.globalMouseMoveMonitor = nil
-        }
-        if let localMouseMoveMonitor {
-            NSEvent.removeMonitor(localMouseMoveMonitor)
-            self.localMouseMoveMonitor = nil
-        }
-    }
 }
 
 private struct CompanionTextInputPanelView: View {
@@ -201,17 +154,25 @@ private struct CompanionTextInputPanelView: View {
     /// matches the trio of trailing buttons (paperclip / submit / close).
     private let chipHeight: CGFloat = 38
 
+    /// True while Milo is listening, processing a transcript, or speaking.
+    /// We freeze input in all three states so the user can't queue another
+    /// prompt on top of the one in flight.
+    private var isBusy: Bool {
+        companionManager.voiceState != .idle
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             TextField(
-                "type a question…",
+                isBusy ? "milo is responding…" : "type a question…",
                 text: $messageText
             )
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white)
+                .foregroundColor(isBusy ? Color.white.opacity(0.45) : .white)
                 .focused($isTextFieldFocused)
                 .onSubmit(submitMessage)
+                .disabled(isBusy)
                 .overlay(IBeamCursorView())
 
             paperclipButton
@@ -326,7 +287,8 @@ private struct CompanionTextInputPanelView: View {
     // MARK: - Submission / Attachments
 
     private var canSubmit: Bool {
-        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !isBusy else { return false }
+        return !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !attachmentData.isEmpty
     }
 

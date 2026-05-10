@@ -133,6 +133,12 @@ enum MiloAnalytics {
         PostHogSDK.shared.capture("note_deleted")
     }
 
+    /// User pressed the Clear button in Settings to wipe in-session
+    /// conversation history.
+    static func trackConversationCleared() {
+        PostHogSDK.shared.capture("conversation_cleared")
+    }
+
     // MARK: - Errors
 
     /// An error occurred during the AI response pipeline.

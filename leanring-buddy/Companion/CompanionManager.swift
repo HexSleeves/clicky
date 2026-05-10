@@ -67,25 +67,28 @@ final class CompanionManager: ObservableObject {
     @Published var detectedElementBubbleText: String?
     @Published private(set) var guidedActionProposal: GuidedActionProposal?
 
-    // MARK: - Onboarding Video State (shared across all screen overlays)
+    // MARK: - Onboarding Video + Prompt
+    //
+    // State + observers + fade timers live in OnboardingController.
+    // CompanionManager exposes forwarding computed properties so OverlayWindow
+    // keeps reading `companionManager.onboardingVideoPlayer` etc. unchanged.
+    // The 40s demo trigger is wired below as a closure that calls
+    // `performOnboardingDemoInteraction()` here — keeping AI/vision/cursor
+    // cross-cutting work in the orchestrator where it belongs.
 
-    @Published var onboardingVideoPlayer: AVPlayer?
-    @Published var showOnboardingVideo: Bool = false
-    @Published var onboardingVideoOpacity: Double = 0.0
-    private var onboardingVideoEndObserver: NSObjectProtocol?
-    private var onboardingDemoTimeObserver: Any?
+    let onboardingController = OnboardingController()
+    private var onboardingControllerCancellable: AnyCancellable?
 
-    // MARK: - Onboarding Prompt Bubble
-
-    /// Text streamed character-by-character on the cursor after the onboarding video ends.
-    @Published var onboardingPromptText: String = ""
-    @Published var onboardingPromptOpacity: Double = 0.0
-    @Published var showOnboardingPrompt: Bool = false
+    var onboardingVideoPlayer: AVPlayer? { onboardingController.videoPlayer }
+    var showOnboardingVideo: Bool { onboardingController.isVideoVisible }
+    var onboardingVideoOpacity: Double { onboardingController.videoOpacity }
+    var onboardingPromptText: String { onboardingController.promptText }
+    var onboardingPromptOpacity: Double { onboardingController.promptOpacity }
+    var showOnboardingPrompt: Bool { onboardingController.isPromptVisible }
 
     // MARK: - Onboarding Music
 
-    private var onboardingMusicPlayer: AVAudioPlayer?
-    private var onboardingMusicFadeTimer: Timer?
+    private let onboardingMusicPlayer = OnboardingMusicPlayer()
     private var fallbackSpeechSynthesizer: AVSpeechSynthesizer?
 
     let buddyDictationManager = BuddyDictationManager()
@@ -112,9 +115,20 @@ final class CompanionManager: ObservableObject {
         return ElevenLabsTTSClient(proxyURL: "\(Self.workerBaseURL)/tts")
     }()
 
-    /// Conversation history so Claude remembers prior exchanges within a session.
-    /// Each entry is the user's transcript and Claude's response.
-    private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
+    /// One round-trip exchange retained for in-session memory. Surfaced
+    /// publicly so the Settings popover can render "what Milo remembers"
+    /// and offer a Clear button.
+    struct ConversationExchange: Identifiable, Equatable {
+        let id = UUID()
+        let userTranscript: String
+        let assistantResponse: String
+        let createdAt: Date
+    }
+
+    /// Conversation history so Claude remembers prior exchanges within a
+    /// session. Capped at the last 10 exchanges. Cleared by quit/relaunch
+    /// or by the user via the Settings popover's Clear button.
+    @Published private(set) var conversationHistory: [ConversationExchange] = []
 
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
@@ -166,68 +180,38 @@ final class CompanionManager: ObservableObject {
     }
 
     // MARK: - Monthly Usage Tracking
+    //
+    // Counters + rollover live in UsageBudget; we forward the existing
+    // public surface here so view files keep reading
+    // `companionManager.monthly…` unchanged. When the budget changes, its
+    // objectWillChange is re-emitted via Combine in init so SwiftUI
+    // re-renders the Settings popover automatically.
 
-    /// Soft "free plan" caps shown on the Settings popover. Not enforced —
-    /// they exist purely so the progress bars render with meaningful
-    /// denominators. Tweak these if you ever introduce real billing.
-    static let monthlyVoiceMessageCap: Int = 100
-    static let monthlyAgentMessageCap: Int = 35
+    let usageBudget = UsageBudget()
+    private var usageBudgetCancellable: AnyCancellable?
 
-    /// Number of voice/text prompts the user has sent this period.
-    /// Resets to 0 when `monthlyUsagePeriodStart` rolls over (every 30 days).
-    @Published private(set) var monthlyVoiceMessageCount: Int = UserDefaults.standard.integer(forKey: "monthlyVoiceMessageCount")
+    static var monthlyVoiceMessageCap: Int { UsageBudget.voiceMessageCap }
+    static var monthlyAgentMessageCap: Int { UsageBudget.agentMessageCap }
 
-    /// Number of Claude responses received this period.
-    @Published private(set) var monthlyAgentMessageCount: Int = UserDefaults.standard.integer(forKey: "monthlyAgentMessageCount")
-
-    /// Anchor for the rolling 30-day usage period. The Settings card shows
-    /// "resets in Xd Yh" relative to `monthlyUsagePeriodStart + 30 days`.
-    @Published private(set) var monthlyUsagePeriodStart: Date = {
-        let storedTimestamp = UserDefaults.standard.double(forKey: "monthlyUsagePeriodStart")
-        if storedTimestamp > 0 {
-            return Date(timeIntervalSince1970: storedTimestamp)
-        }
-        // First launch — anchor the period to "now" and stash it so the
-        // countdown stays consistent across launches.
-        let now = Date()
-        UserDefaults.standard.set(now.timeIntervalSince1970, forKey: "monthlyUsagePeriodStart")
-        return now
-    }()
-
-    private static let monthlyUsagePeriodLength: TimeInterval = 60 * 60 * 24 * 30
-
-    /// Date the current usage period rolls over and the counts reset.
-    var monthlyUsagePeriodEnd: Date {
-        monthlyUsagePeriodStart.addingTimeInterval(Self.monthlyUsagePeriodLength)
-    }
+    var monthlyVoiceMessageCount: Int { usageBudget.voiceMessageCount }
+    var monthlyAgentMessageCount: Int { usageBudget.agentMessageCount }
+    var monthlyUsagePeriodStart: Date { usageBudget.periodStart }
+    var monthlyUsagePeriodEnd: Date { usageBudget.periodEnd }
 
     func incrementMonthlyVoiceMessageCount() {
-        rolloverMonthlyUsagePeriodIfNeeded()
-        monthlyVoiceMessageCount += 1
-        UserDefaults.standard.set(monthlyVoiceMessageCount, forKey: "monthlyVoiceMessageCount")
+        usageBudget.incrementVoiceMessageCount()
     }
 
     func incrementMonthlyAgentMessageCount() {
-        rolloverMonthlyUsagePeriodIfNeeded()
-        monthlyAgentMessageCount += 1
-        UserDefaults.standard.set(monthlyAgentMessageCount, forKey: "monthlyAgentMessageCount")
+        usageBudget.incrementAgentMessageCount()
     }
 
-    /// Resets the counters and bumps the period start when the rolling
-    /// 30-day window has elapsed. Called before every increment so the
-    /// rollover happens lazily without a background timer.
-    private func rolloverMonthlyUsagePeriodIfNeeded() {
-        guard Date() >= monthlyUsagePeriodEnd else { return }
-
-        monthlyVoiceMessageCount = 0
-        monthlyAgentMessageCount = 0
-        let newPeriodStart = Date()
-        monthlyUsagePeriodStart = newPeriodStart
-
-        let defaults = UserDefaults.standard
-        defaults.set(0, forKey: "monthlyVoiceMessageCount")
-        defaults.set(0, forKey: "monthlyAgentMessageCount")
-        defaults.set(newPeriodStart.timeIntervalSince1970, forKey: "monthlyUsagePeriodStart")
+    /// Wipes the in-session conversation history Claude sees on each turn.
+    /// Persistent saved notes are untouched. Called from the Settings
+    /// popover's Clear button.
+    func clearConversation() {
+        conversationHistory.removeAll()
+        MiloAnalytics.trackConversationCleared()
     }
 
     /// User preference for whether the Milo cursor should be shown.
@@ -297,6 +281,8 @@ final class CompanionManager: ObservableObject {
         refreshAllPermissions()
         print("🔑 Milo start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
+        bindUsageBudget()
+        bindOnboardingController()
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
@@ -330,7 +316,7 @@ final class CompanionManager: ObservableObject {
         MiloAnalytics.trackOnboardingStarted()
 
         // Play Besaid theme at 60% volume, fade out after 1m 30s
-        startOnboardingMusic()
+        onboardingMusicPlayer.start()
 
         // Show the overlay for the first time — isFirstAppearance triggers
         // the welcome animation and onboarding video
@@ -344,75 +330,11 @@ final class CompanionManager: ObservableObject {
     func replayOnboarding() {
         NotificationCenter.default.post(name: .miloDismissPanel, object: nil)
         MiloAnalytics.trackOnboardingReplayed()
-        startOnboardingMusic()
+        onboardingMusicPlayer.start()
         // Tear down any existing overlays and recreate with isFirstAppearance = true
         overlayWindowManager.hasShownOverlayBefore = false
         overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
         isOverlayVisible = true
-    }
-
-    private func stopOnboardingMusic() {
-        onboardingMusicFadeTimer?.invalidate()
-        onboardingMusicFadeTimer = nil
-        onboardingMusicPlayer?.stop()
-        onboardingMusicPlayer = nil
-    }
-
-    private func startOnboardingMusic() {
-        stopOnboardingMusic()
-        guard let musicURL = Bundle.main.url(forResource: "ff", withExtension: "mp3")
-            ?? Bundle.main.url(forResource: "ff", withExtension: "mp3", subdirectory: "Audio")
-        else {
-            print("⚠️ Milo: ff.mp3 not found in bundle")
-            return
-        }
-
-        do {
-            let player = try AVAudioPlayer(contentsOf: musicURL)
-            player.volume = 0.3
-            player.play()
-            self.onboardingMusicPlayer = player
-
-            // After 1m 30s, fade the music out over 3s
-            onboardingMusicFadeTimer = Timer.scheduledTimer(withTimeInterval: 90.0, repeats: false) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.fadeOutOnboardingMusic()
-                }
-            }
-        } catch {
-            print("⚠️ Milo: Failed to play onboarding music: \(error)")
-        }
-    }
-
-    private func fadeOutOnboardingMusic() {
-        guard let player = onboardingMusicPlayer else { return }
-
-        let fadeSteps = 30
-        let fadeDuration: Double = 3.0
-        let stepInterval = fadeDuration / Double(fadeSteps)
-        let volumeDecrement = player.volume / Float(fadeSteps)
-        var stepsRemaining = fadeSteps
-
-        // Player is mutated only on MainActor inside the Task hop below.
-        // We don't capture `player` directly — we re-fetch from self each tick
-        // so the @Sendable closure has no non-Sendable captures.
-        onboardingMusicFadeTimer = Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { [weak self] timer in
-            Task { @MainActor [weak self] in
-                guard let self, let activePlayer = self.onboardingMusicPlayer else {
-                    timer.invalidate()
-                    return
-                }
-                stepsRemaining -= 1
-                activePlayer.volume -= volumeDecrement
-
-                if stepsRemaining <= 0 {
-                    timer.invalidate()
-                    activePlayer.stop()
-                    self.onboardingMusicPlayer = nil
-                    self.onboardingMusicFadeTimer = nil
-                }
-            }
-        }
     }
 
     func clearDetectedElementLocation() {
@@ -621,6 +543,38 @@ final class CompanionManager: ObservableObject {
             }
     }
 
+    /// Re-emits `usageBudget.objectWillChange` so the Settings popover
+    /// (which binds to `CompanionManager`) re-renders when counters or the
+    /// period start change. SwiftUI doesn't bubble nested ObservableObjects.
+    private func bindUsageBudget() {
+        usageBudgetCancellable = usageBudget.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+    }
+
+    /// Re-emits `onboardingController.objectWillChange` so OverlayWindow
+    /// re-renders when the video player, opacity, or prompt text change.
+    /// Also installs the demo trigger callback that kicks off the 40s
+    /// cursor-pointing demo (which crosses AI + vision + cursor state).
+    private func bindOnboardingController() {
+        onboardingControllerCancellable = onboardingController.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+
+        onboardingController.onDemoTrigger = { [weak self] in
+            MiloAnalytics.trackOnboardingDemoTriggered()
+            self?.performOnboardingDemoInteraction()
+        }
+
+        onboardingController.onVideoEnded = {
+            MiloAnalytics.trackOnboardingVideoCompleted()
+        }
+    }
+
     private func bindVoiceStateObservation() {
         voiceStateCancellable = buddyDictationManager.$isRecordingFromKeyboardShortcut
             .combineLatest(
@@ -700,16 +654,7 @@ final class CompanionManager: ObservableObject {
             clearDetectedElementLocation()
 
             // Dismiss the onboarding prompt if it's showing
-            if showOnboardingPrompt {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    onboardingPromptOpacity = 0.0
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    self.showOnboardingPrompt = false
-                    self.onboardingPromptText = ""
-                }
-            }
-    
+            onboardingController.dismissPromptIfVisible()
 
             MiloAnalytics.trackPushToTalkStarted()
 
@@ -729,7 +674,7 @@ final class CompanionManager: ObservableObject {
 
                         // "remember that …" / "save note: …" never goes to Claude — it
                         // becomes a saved note and Milo just confirms it.
-                        if let capturedNoteText = Self.parseNoteCaptureText(from: finalTranscript) {
+                        if let capturedNoteText = NoteCaptureRouter.parseNoteCaptureText(from: finalTranscript) {
                             self.captureNote(text: capturedNoteText)
                             return
                         }
@@ -816,7 +761,7 @@ final class CompanionManager: ObservableObject {
         // Note capture works for typed input the same way it works for voice —
         // attachments are ignored when the user is just saving a memory.
         if attachments.isEmpty,
-           let capturedNoteText = Self.parseNoteCaptureText(from: trimmedTypedMessage) {
+           let capturedNoteText = NoteCaptureRouter.parseNoteCaptureText(from: trimmedTypedMessage) {
             captureNote(text: capturedNoteText)
             return
         }
@@ -828,47 +773,6 @@ final class CompanionManager: ObservableObject {
     }
 
     // MARK: - Note Capture
-
-    /// Detects a leading "remember that …" / "save note: …" intent and returns
-    /// the trailing memory text. Returns nil when the transcript is a normal
-    /// question. Case-insensitive; tolerates trailing punctuation in the
-    /// trigger phrase ("note:" / "note,") and a few spoken variants.
-    static func parseNoteCaptureText(from transcript: String) -> String? {
-        let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedTranscript.isEmpty else { return nil }
-
-        // The triggers are intentionally specific — a stray "remember when …"
-        // story shouldn't accidentally save a note. Order matters: longer
-        // prefixes first so "save note that" matches before "save note".
-        let noteCapturePrefixes: [String] = [
-            "remember that ",
-            "remember to ",
-            "remember this:",
-            "remember:",
-            "please remember that ",
-            "please remember to ",
-            "save a note that ",
-            "save a note:",
-            "save note that ",
-            "save note:",
-            "save note ",
-            "make a note that ",
-            "make a note:",
-            "note that ",
-            "note:"
-        ]
-
-        let lowercasedTranscript = trimmedTranscript.lowercased()
-        for prefix in noteCapturePrefixes {
-            if lowercasedTranscript.hasPrefix(prefix) {
-                let prefixEndIndex = trimmedTranscript.index(trimmedTranscript.startIndex, offsetBy: prefix.count)
-                let capturedNoteText = trimmedTranscript[prefixEndIndex...]
-                    .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
-                return capturedNoteText.isEmpty ? nil : capturedNoteText
-            }
-        }
-        return nil
-    }
 
     /// Saves the captured text as a note and gives the user a brief audible
     /// confirmation. We deliberately skip the Claude round-trip so saving a
@@ -900,46 +804,6 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    // MARK: - Companion Prompt
-
-    private static let companionVoiceResponseSystemPrompt = """
-    you're milo, a friendly always-on companion that lives in the user's menu bar. the user just spoke to you via push-to-talk or typed to you from the floating text box, and you can see their screen(s). your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
-
-    rules:
-    - default to one or two sentences. be direct and dense. BUT if the user asks you to explain more, go deeper, or elaborate, then go all out — give a thorough, detailed explanation with no length limit.
-    - all lowercase, casual, warm. no emojis.
-    - write for the ear, not the eye. short sentences. no lists, bullet points, markdown, or formatting — just natural speech.
-    - don't use abbreviations or symbols that sound weird read aloud. write "for example" not "e.g.", spell out small numbers.
-    - if the user's question relates to what's on their screen, reference specific things you see.
-    - if the screenshot doesn't seem relevant to their question, just answer the question directly.
-    - you can help with anything — coding, writing, general knowledge, brainstorming.
-    - never say "simply" or "just".
-    - don't read out code verbatim. describe what the code does or what needs to change conversationally.
-    - focus on giving a thorough, useful explanation. don't end with simple yes/no questions like "want me to explain more?" or "should i show you?" — those are dead ends that force the user to just say yes.
-    - instead, when it fits naturally, end by planting a seed — mention something bigger or more ambitious they could try, a related concept that goes deeper, or a next-level technique that builds on what you just explained. make it something worth coming back for, not a question they'd just nod to. it's okay to not end with anything extra if the answer is complete on its own.
-    - if you receive multiple screen images, the one labeled "primary focus" is where the cursor is — prioritize that one but reference others if relevant.
-
-    element pointing:
-    you have a small blue triangle cursor that can fly to and point at things on screen. use it whenever pointing would genuinely help the user — if they're asking how to do something, looking for a menu, trying to find a button, or need help navigating an app, point at the relevant element. err on the side of pointing rather than not pointing, because it makes your help way more useful and concrete.
-
-    don't point at things when it would be pointless — like if the user asks a general knowledge question, or the conversation has nothing to do with what's on screen, or you'd just be pointing at something obvious they're already looking at. but if there's a specific UI element, menu, button, or area on screen that's relevant to what you're helping with, point at it.
-
-    when you point, append a coordinate tag at the very end of your response, AFTER your spoken text. the screenshot images are labeled with their pixel dimensions. use those dimensions as the coordinate space. the origin (0,0) is the top-left corner of the image. x increases rightward, y increases downward.
-
-    format: [POINT:x,y:label] where x,y are integer pixel coordinates in the screenshot's coordinate space, and label is a short 1-3 word description of the element (like "search bar" or "save button"). if the element is on the cursor's screen you can omit the screen number. if the element is on a DIFFERENT screen, append :screenN where N is the screen number from the image label (e.g. :screen2). this is important — without the screen number, the cursor will point at the wrong place.
-
-    if pointing wouldn't help, append [POINT:none].
-
-    guided actions:
-    when the user asks you to click, open, select, press, choose, or show where to click, milo can perform one click after your response if the app setting allows it or the user confirms it. identify exactly one target and append the point tag for that target. keep the spoken response short, natural, and action-oriented. do not say "you can click it yourself", "click it yourself", or "i can't click". good responses sound like "got it, i'll click the send button." or "i found it — clicking the deploy button." never claim the click already happened before the point tag is processed.
-
-    examples:
-    - user asks how to color grade in final cut: "you'll want to open the color inspector — it's right up in the top right area of the toolbar. click that and you'll get all the color wheels and curves. [POINT:1100,42:color inspector]"
-    - user asks what html is: "html stands for hypertext markup language, it's basically the skeleton of every web page. curious how it connects to the css you're looking at? [POINT:none]"
-    - user asks how to commit in xcode: "see that source control menu up top? click that and hit commit, or you can use command option c as a shortcut. [POINT:285,11:source control]"
-    - element is on screen 2 (not where cursor is): "that's over on your other monitor — see the terminal window? [POINT:400,300:terminal:screen2]"
-    """
-
     // MARK: - AI Response Pipeline
 
     /// Captures a screenshot, sends it along with the transcript to Claude,
@@ -967,7 +831,7 @@ final class CompanionManager: ObservableObject {
             do {
                 // Capture all connected screens so the AI has full context
                 let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
-                let isGuidedActionRequest = Self.isGuidedActionRequest(transcript)
+                let isGuidedActionRequest = PointTagParser.isGuidedActionRequest(transcript)
 
                 guard !Task.isCancelled else { return }
 
@@ -994,14 +858,9 @@ final class CompanionManager: ObservableObject {
                     (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
                 }
 
-                // Prepend the user's saved notes (if any) so Claude has their
-                // long-running context for every reply.
-                let combinedSystemPrompt: String = {
-                    guard let notesBlock = notesStore.systemPromptBlock() else {
-                        return Self.companionVoiceResponseSystemPrompt
-                    }
-                    return Self.companionVoiceResponseSystemPrompt + "\n\n" + notesBlock
-                }()
+                let combinedSystemPrompt = CompanionSystemPrompt.build(
+                    notesBlock: notesStore.systemPromptBlock()
+                )
 
                 let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
                     images: labeledImages,
@@ -1016,7 +875,7 @@ final class CompanionManager: ObservableObject {
                 guard !Task.isCancelled else { return }
 
                 // Parse the [POINT:...] tag from Claude's response
-                let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
+                let parseResult = PointTagParser.parse(fullResponseText)
                 let spokenText = parseResult.spokenText
 
                 // Handle element pointing if Claude returned coordinates.
@@ -1099,9 +958,10 @@ final class CompanionManager: ObservableObject {
 
                 // Save this exchange to conversation history (with the point tag
                 // stripped so it doesn't confuse future context)
-                conversationHistory.append((
+                conversationHistory.append(ConversationExchange(
                     userTranscript: transcript,
-                    assistantResponse: spokenText
+                    assistantResponse: spokenText,
+                    createdAt: Date()
                 ))
 
                 // Keep only the last 10 exchanges to avoid unbounded context growth
@@ -1220,212 +1080,16 @@ final class CompanionManager: ObservableObject {
         )?.post(tap: .cghidEventTap)
     }
 
-    static func isGuidedActionRequest(_ transcript: String) -> Bool {
-        let normalizedTranscript = transcript.lowercased()
-        let guidedActionPhrases = [
-            "click",
-            "open",
-            "select",
-            "press",
-            "choose",
-            "tap",
-            "where do i click",
-            "show me where",
-            "show where",
-            "what do i click",
-            "which button",
-            "which menu"
-        ]
-
-        return guidedActionPhrases.contains { normalizedTranscript.contains($0) }
-    }
-
-    /// Result of parsing a [POINT:...] tag from Claude's response.
-    struct PointingParseResult {
-        /// The response text with the [POINT:...] tag removed — this is what gets spoken.
-        let spokenText: String
-        /// The parsed pixel coordinate, or nil if Claude said "none" or no tag was found.
-        let coordinate: CGPoint?
-        /// Short label describing the element (e.g. "run button"), or "none".
-        let elementLabel: String?
-        /// Which screen the coordinate refers to (1-based), or nil to default to cursor screen.
-        let screenNumber: Int?
-    }
-
-    /// Parses a [POINT:x,y:label:screenN] or [POINT:none] tag from the end of Claude's response.
-    /// Returns the spoken text (tag removed) and the optional coordinate + label + screen number.
-    static func parsePointingCoordinates(from responseText: String) -> PointingParseResult {
-        // Match [POINT:none] or [POINT:123,456:label] or [POINT:123,456:label:screen2]
-        let pattern = #"\[POINT:(?:none|(\d+)\s*,\s*(\d+)(?::([^\]:\s][^\]:]*?))?(?::screen(\d+))?)\]\s*$"#
-
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
-              let match = regex.firstMatch(in: responseText, range: NSRange(responseText.startIndex..., in: responseText)) else {
-            // No tag found at all
-            return PointingParseResult(spokenText: responseText, coordinate: nil, elementLabel: nil, screenNumber: nil)
-        }
-
-        // Remove the tag from the spoken text
-        let tagRange = Range(match.range, in: responseText)!
-        let spokenText = String(responseText[..<tagRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Check if it's [POINT:none]
-        guard match.numberOfRanges >= 3,
-              let xRange = Range(match.range(at: 1), in: responseText),
-              let yRange = Range(match.range(at: 2), in: responseText),
-              let x = Double(responseText[xRange]),
-              let y = Double(responseText[yRange]) else {
-            return PointingParseResult(spokenText: spokenText, coordinate: nil, elementLabel: "none", screenNumber: nil)
-        }
-
-        var elementLabel: String? = nil
-        if match.numberOfRanges >= 4, let labelRange = Range(match.range(at: 3), in: responseText) {
-            elementLabel = String(responseText[labelRange]).trimmingCharacters(in: .whitespaces)
-        }
-
-        var screenNumber: Int? = nil
-        if match.numberOfRanges >= 5, let screenRange = Range(match.range(at: 4), in: responseText) {
-            screenNumber = Int(responseText[screenRange])
-        }
-
-        return PointingParseResult(
-            spokenText: spokenText,
-            coordinate: CGPoint(x: x, y: y),
-            elementLabel: elementLabel,
-            screenNumber: screenNumber
-        )
-    }
+    // Point tag parsing + guided-action heuristic live in PointTagParser.
 
     // MARK: - Onboarding Video
 
-    /// Sets up the onboarding video player, starts playback, and schedules
-    /// the demo interaction at 40s. Called by BlueCursorView when onboarding starts.
     func setupOnboardingVideo() {
-        guard let videoURL = URL(string: "https://stream.mux.com/e5jB8UuSrtFABVnTHCR7k3sIsmcUHCyhtLu1tzqLlfs.m3u8") else { return }
-
-        let player = AVPlayer(url: videoURL)
-        player.isMuted = false
-        player.volume = 0.0
-        self.onboardingVideoPlayer = player
-        self.showOnboardingVideo = true
-        self.onboardingVideoOpacity = 0.0
-
-        // Start playback immediately — the video plays while invisible,
-        // then we fade in both the visual and audio over 1s.
-        player.play()
-
-        // Wait for SwiftUI to mount the view, then set opacity to 1.
-        // The .animation modifier on the view handles the actual animation.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            self.onboardingVideoOpacity = 1.0
-            // Fade audio volume from 0 → 1 over 2s to match visual fade
-            self.fadeInVideoAudio(player: player, targetVolume: 1.0, duration: 2.0)
-        }
-
-        // At 40 seconds into the video, trigger the onboarding demo where
-        // Milo flies to something interesting on screen and comments on it
-        let demoTriggerTime = CMTime(seconds: 40, preferredTimescale: 600)
-        onboardingDemoTimeObserver = player.addBoundaryTimeObserver(
-            forTimes: [NSValue(time: demoTriggerTime)],
-            queue: .main
-        ) { [weak self] in
-            Task { @MainActor [weak self] in
-                MiloAnalytics.trackOnboardingDemoTriggered()
-                self?.performOnboardingDemoInteraction()
-            }
-        }
-
-        // Fade out and clean up when the video finishes
-        onboardingVideoEndObserver = NotificationCenter.default.addObserver(
-            forName: AVPlayerItem.didPlayToEndTimeNotification,
-            object: player.currentItem,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                MiloAnalytics.trackOnboardingVideoCompleted()
-                self.onboardingVideoOpacity = 0.0
-                // Wait for the 2s fade-out animation to complete before tearing down
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    self.tearDownOnboardingVideo()
-                    // After the video disappears, stream in the prompt to try talking
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        self.startOnboardingPromptStream()
-                    }
-                }
-            }
-        }
+        onboardingController.startVideo()
     }
 
     func tearDownOnboardingVideo() {
-        showOnboardingVideo = false
-        if let timeObserver = onboardingDemoTimeObserver {
-            onboardingVideoPlayer?.removeTimeObserver(timeObserver)
-            onboardingDemoTimeObserver = nil
-        }
-        onboardingVideoPlayer?.pause()
-        onboardingVideoPlayer = nil
-        if let observer = onboardingVideoEndObserver {
-            NotificationCenter.default.removeObserver(observer)
-            onboardingVideoEndObserver = nil
-        }
-    }
-
-    private func startOnboardingPromptStream() {
-        let message = "press control + option to talk, or control + command to type"
-        onboardingPromptText = ""
-        showOnboardingPrompt = true
-        onboardingPromptOpacity = 0.0
-
-        withAnimation(.easeIn(duration: 0.4)) {
-            onboardingPromptOpacity = 1.0
-        }
-
-        var currentIndex = 0
-        Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { [weak self] timer in
-            Task { @MainActor [weak self] in
-                guard let self else {
-                    timer.invalidate()
-                    return
-                }
-                guard currentIndex < message.count else {
-                    timer.invalidate()
-                    // Auto-dismiss after 10 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-                        guard self.showOnboardingPrompt else { return }
-                        withAnimation(.easeOut(duration: 0.3)) {
-                            self.onboardingPromptOpacity = 0.0
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                            self.showOnboardingPrompt = false
-                            self.onboardingPromptText = ""
-                        }
-                    }
-                    return
-                }
-                let index = message.index(message.startIndex, offsetBy: currentIndex)
-                self.onboardingPromptText.append(message[index])
-                currentIndex += 1
-            }
-        }
-    }
-
-    /// Gradually raises an AVPlayer's volume from its current level to the
-    /// target over the specified duration, creating a smooth audio fade-in.
-    private func fadeInVideoAudio(player: AVPlayer, targetVolume: Float, duration: Double) {
-        let steps = 20
-        let stepInterval = duration / Double(steps)
-        let volumeIncrement = (targetVolume - player.volume) / Float(steps)
-        var stepsRemaining = steps
-
-        Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { timer in
-            stepsRemaining -= 1
-            player.volume += volumeIncrement
-
-            if stepsRemaining <= 0 {
-                timer.invalidate()
-                player.volume = targetVolume
-            }
-        }
+        onboardingController.stopVideo()
     }
 
     // MARK: - Onboarding Demo Interaction
@@ -1472,7 +1136,7 @@ final class CompanionManager: ObservableObject {
                     onTextChunk: { _ in }
                 )
 
-                let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
+                let parseResult = PointTagParser.parse(fullResponseText)
 
                 guard let pointCoordinate = parseResult.coordinate else {
                     print("🎯 Onboarding demo: no element to point at")

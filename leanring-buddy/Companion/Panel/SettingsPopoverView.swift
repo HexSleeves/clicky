@@ -26,6 +26,17 @@ struct SettingsPopoverView: View {
     /// view refresh on every render.
     @State private var nowForCountdown: Date = Date()
 
+    /// Whether the in-session conversation history row is expanded to show
+    /// the actual exchanges. Collapsed by default so the popover height
+    /// stays manageable when the history is non-empty.
+    @State private var isConversationHistoryExpanded: Bool = false
+
+    /// Confirmation toggle for the Clear button — flips on the first
+    /// press, second press inside 4s actually clears. Avoids an OS alert
+    /// for what is a single-tap reversible action by quitting+relaunching.
+    @State private var isConfirmingClear: Bool = false
+    @State private var confirmingClearResetTask: Task<Void, Never>?
+
     private static let countdownRefresh = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -36,6 +47,7 @@ struct SettingsPopoverView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     planCard
                     upgradeCTA
+                    conversationMemoryCard
                     settingsRowsCard
                 }
                 .padding(.horizontal, 16)
@@ -432,6 +444,148 @@ struct SettingsPopoverView: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
+    }
+
+    // MARK: - Conversation Memory
+
+    /// Card surfacing the in-session conversation history Claude sees on
+    /// each turn. Lets the user understand and reset what Milo "remembers"
+    /// without quitting + relaunching the app. Saved notes are a separate
+    /// surface (the Notes window) and are untouched by Clear.
+    private var conversationMemoryCard: some View {
+        let history = companionManager.conversationHistory
+        let countLabel = history.count == 1 ? "1 exchange" : "\(history.count) exchanges"
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "brain")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(DS.Colors.textSecondary)
+                    .frame(width: 18, height: 18)
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Conversation memory")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundColor(DS.Colors.textPrimary)
+
+                    Text(history.isEmpty
+                         ? "Milo has no in-session memory yet. Saved notes are not affected."
+                         : "Milo remembers \(countLabel) from this session. Saved notes are not affected.")
+                        .font(.system(size: 11))
+                        .foregroundColor(DS.Colors.textTertiary)
+                        .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 8) {
+                Button(action: { isConversationHistoryExpanded.toggle() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: isConversationHistoryExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text(isConversationHistoryExpanded ? "Hide" : "View")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundColor(history.isEmpty ? DS.Colors.textTertiary : DS.Colors.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: DS.CornerRadius.small, style: .continuous)
+                            .fill(DS.Colors.surface2)
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(history.isEmpty)
+                .pointerCursor(isEnabled: !history.isEmpty)
+
+                Spacer(minLength: 0)
+
+                Button(action: handleClearConversationButton) {
+                    Text(isConfirmingClear ? "Tap again to confirm" : "Clear")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(history.isEmpty
+                                         ? DS.Colors.textTertiary
+                                         : DS.Colors.destructiveText)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: DS.CornerRadius.small, style: .continuous)
+                                .fill(DS.Colors.surface2)
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(history.isEmpty)
+                .pointerCursor(isEnabled: !history.isEmpty)
+                .animation(.easeOut(duration: 0.15), value: isConfirmingClear)
+            }
+
+            if isConversationHistoryExpanded && !history.isEmpty {
+                conversationHistoryList(history)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                .fill(DS.Colors.surface1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+        )
+    }
+
+    private func conversationHistoryList(_ history: [CompanionManager.ConversationExchange]) -> some View {
+        // Reverse so most recent shows first — matches how users think
+        // about "the last thing I said".
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(history.reversed()) { exchange in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("You: \(exchange.userTranscript)")
+                        .font(.system(size: 11))
+                        .foregroundColor(DS.Colors.textSecondary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                    Text("Milo: \(exchange.assistantResponse)")
+                        .font(.system(size: 11))
+                        .foregroundColor(DS.Colors.textTertiary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: DS.CornerRadius.small, style: .continuous)
+                        .fill(DS.Colors.surface2.opacity(0.5))
+                )
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func handleClearConversationButton() {
+        if isConfirmingClear {
+            confirmingClearResetTask?.cancel()
+            confirmingClearResetTask = nil
+            companionManager.clearConversation()
+            isConfirmingClear = false
+            isConversationHistoryExpanded = false
+            return
+        }
+
+        isConfirmingClear = true
+        confirmingClearResetTask?.cancel()
+        confirmingClearResetTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if !Task.isCancelled {
+                isConfirmingClear = false
+            }
+        }
     }
 
     // MARK: - Footer
