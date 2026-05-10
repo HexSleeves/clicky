@@ -21,4 +21,4 @@ class_name = "PairingSessionDO"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["PairingSessionDO"]
+new_sqlite_classes = ["PairingSessionDO"]
