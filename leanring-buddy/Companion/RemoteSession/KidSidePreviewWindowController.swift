@@ -50,6 +50,24 @@ final class KidSidePreviewWindowController: NSObject {
         hostedWindow?.orderOut(nil)
     }
 
+    /// Convenience hook for the wire path: takes a SnapDelivery wire
+    /// payload, base64-decodes the bytes, and renders. Drops malformed
+    /// payloads silently rather than throwing — the data channel is
+    /// expected to flush junk every now and then.
+    func renderSnapDelivery(_ snapDelivery: SnapDelivery) {
+        guard let encodedBytes = Data(base64Encoded: snapDelivery.bytesBase64) else {
+            return
+        }
+        renderSnap(
+            encodedBytes: encodedBytes,
+            seniorScreenPixelSize: CGSize(
+                width: CGFloat(snapDelivery.pixelWidth),
+                height: CGFloat(snapDelivery.pixelHeight)
+            ),
+            seniorScreenIndex: snapDelivery.screenIndex
+        )
+    }
+
     /// Renders a freshly-arrived HEIC snap. Decoding happens on the
     /// main actor because NSImage(data:) is cheap and avoids a
     /// hand-off race with the SwiftUI rebuild.

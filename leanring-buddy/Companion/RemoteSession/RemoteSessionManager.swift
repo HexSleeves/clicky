@@ -177,6 +177,30 @@ final class RemoteSessionManager: ObservableObject {
         transport?.send(message)
     }
 
+    /// Senior side: ship an encoded snap to the kid. Throttled by
+    /// `shouldDeliverSnap(now:)` upstream — this method itself does
+    /// NOT consult the throttle, so callers can decide whether a
+    /// given snap is worth the bandwidth.
+    func sendSnapDelivery(_ payload: SnapDelivery) {
+        guard case .active = state else { return }
+        let message = RemoteWireMessage.snapDelivery(
+            envelope: RemoteWireEnvelope(),
+            payload: payload
+        )
+        transport?.send(message)
+    }
+
+    // MARK: - Inbound dispatch (kid-facing hooks)
+
+    /// Hook the kid-side preview window subscribes to so it gets each
+    /// inbound snap as bytes + dimensions ready to render. Set during
+    /// composition wiring.
+    var onIncomingSnapDelivery: ((SnapDelivery) -> Void)?
+
+    /// Hook the senior side could subscribe to if it wanted to mirror
+    /// kid-driven CursorCommands locally (debug / loopback). Optional.
+    var onIncomingCursorCommand: ((CursorCommand) -> Void)?
+
     // MARK: - Inbound dispatch
 
     /// Hook surfaced for tests + future routing layers. Real callers
@@ -186,6 +210,14 @@ final class RemoteSessionManager: ObservableObject {
     private func handleIncoming(_ message: RemoteWireMessage) {
         guard case .active = state else { return }
         lastReceivedMessage = message
+        switch message {
+        case .snapDelivery(_, let payload):
+            onIncomingSnapDelivery?(payload)
+        case .cursorCommand(_, let payload):
+            onIncomingCursorCommand?(payload)
+        case .snapRequest, .clickConfirmation, .unsupported:
+            break
+        }
     }
 
     private func handleTransportDisconnect() {

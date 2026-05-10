@@ -18,6 +18,7 @@ export const REMOTE_WIRE_PROTOCOL_VERSION = 1 as const;
 export const WireMessageKind = {
   cursorCommand: "cursor.command",
   snapRequest: "snap.request",
+  snapDelivery: "snap.delivery",
   clickConfirmation: "click.confirmation",
 } as const;
 
@@ -49,6 +50,15 @@ export interface SnapRequestPayload {
   reason?: string | null;
 }
 
+/** Senior -> kid: deliver an encoded screenshot snap (base64 inline). */
+export interface SnapDeliveryPayload {
+  bytesBase64: string;
+  format: "heic" | "jpeg";
+  pixelWidth: number;
+  pixelHeight: number;
+  screenIndex: number;
+}
+
 /** Bidirectional: confirm or decline a previously-proposed click action. */
 export interface ClickConfirmationPayload {
   proposalId: string;
@@ -66,6 +76,11 @@ export interface SnapRequestMessage extends WireEnvelope {
   data: SnapRequestPayload;
 }
 
+export interface SnapDeliveryMessage extends WireEnvelope {
+  kind: typeof WireMessageKind.snapDelivery;
+  data: SnapDeliveryPayload;
+}
+
 export interface ClickConfirmationMessage extends WireEnvelope {
   kind: typeof WireMessageKind.clickConfirmation;
   data: ClickConfirmationPayload;
@@ -74,6 +89,7 @@ export interface ClickConfirmationMessage extends WireEnvelope {
 export type WireMessage =
   | CursorCommandMessage
   | SnapRequestMessage
+  | SnapDeliveryMessage
   | ClickConfirmationMessage
   | (WireEnvelope & { data?: unknown }); // unknown future kinds
 

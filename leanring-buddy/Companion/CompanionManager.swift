@@ -371,6 +371,8 @@ final class CompanionManager: ObservableObject {
     /// Wires the kid-side preview window's click handler so taps inside
     /// the preview translate (via PreviewClickTranslator) into wire-level
     /// CursorCommand messages routed through RemoteSessionManager.
+    /// Also wires the inbound SnapDelivery hook so received snaps land
+    /// in the kid's preview window.
     /// Called once during `start()`; the window itself only appears
     /// when `presentKidSidePreviewIfNeeded()` runs.
     private func wireRemoteHelpSurfaces() {
@@ -383,6 +385,37 @@ final class CompanionManager: ObservableObject {
                 label: nil
             )
             self.remoteSessionManager.sendCursorCommand(cursorCommand)
+        }
+
+        remoteSessionManager.onIncomingSnapDelivery = { [weak self] snapDelivery in
+            guard let self else { return }
+            // Snap arrival auto-presents the preview window so the kid
+            // sees it without having to remember to open it.
+            self.kidSidePreviewWindowController.showWindow()
+            self.kidSidePreviewWindowController.renderSnapDelivery(snapDelivery)
+        }
+    }
+
+    /// Senior side: capture the cursor screen, encode HEIC, ship the
+    /// bytes to the kid via SnapDelivery. Respects
+    /// `RemoteSessionManager.shouldDeliverSnap` so we don't busy-loop
+    /// the data channel on rapid input events. Safe to call from any
+    /// state — the throttle returns false outside `.active`.
+    func captureAndDeliverSnapToKid() async {
+        guard remoteSessionManager.shouldDeliverSnap() else { return }
+        do {
+            let (encodedSnap, screenIndex) =
+                try await CompanionScreenCaptureUtility.captureCursorScreenAsEncodedSnap()
+            let snapDelivery = SnapDelivery(
+                bytesBase64: encodedSnap.bytes.base64EncodedString(),
+                format: encodedSnap.format == .heic ? .heic : .jpeg,
+                pixelWidth: encodedSnap.pixelWidth,
+                pixelHeight: encodedSnap.pixelHeight,
+                screenIndex: screenIndex
+            )
+            remoteSessionManager.sendSnapDelivery(snapDelivery)
+        } catch {
+            NSLog("[CompanionManager] snap capture/encode failed: \(error)")
         }
     }
 

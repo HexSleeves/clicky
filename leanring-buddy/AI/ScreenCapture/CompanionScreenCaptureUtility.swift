@@ -129,4 +129,75 @@ enum CompanionScreenCaptureUtility {
 
         return capturedScreens
     }
+
+    /// Captures only the screen the cursor is currently on, encodes it
+    /// as HEIC (JPEG fallback), and returns both the encoded snap and
+    /// the display's pixel size + screen index.
+    ///
+    /// Used by the senior-side remote-help path: a snap-on-input event
+    /// fires this, the encoded bytes ship to the kid via SnapDelivery,
+    /// the kid renders + clicks, and a CursorCommand flies back. Any
+    /// callsite needing a snap during a remote-help session should go
+    /// through here, NOT the JPEG-all-screens path which is sized for
+    /// Claude vision and includes our own UI elements.
+    static func captureCursorScreenAsEncodedSnap()
+    async throws -> (snap: SnapEncoder.EncodedSnap, screenIndex: Int) {
+        let content = try await SCShareableContent.excludingDesktopWindows(
+            false,
+            onScreenWindowsOnly: true
+        )
+        guard !content.displays.isEmpty else {
+            throw NSError(
+                domain: "CompanionScreenCapture",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "No display available for capture"]
+            )
+        }
+
+        let mouseLocation = NSEvent.mouseLocation
+        var nsScreenByDisplayID: [CGDirectDisplayID: NSScreen] = [:]
+        for screen in NSScreen.screens {
+            if let screenNumber = screen.deviceDescription[
+                NSDeviceDescriptionKey("NSScreenNumber")
+            ] as? CGDirectDisplayID {
+                nsScreenByDisplayID[screenNumber] = screen
+            }
+        }
+
+        // Pick the display the cursor is on; fall back to first display
+        // if no match (shouldn't happen but defensive).
+        let cursorDisplayIndex = content.displays.firstIndex { display in
+            let frame = nsScreenByDisplayID[display.displayID]?.frame
+                ?? CGRect(x: display.frame.origin.x, y: display.frame.origin.y,
+                          width: CGFloat(display.width), height: CGFloat(display.height))
+            return frame.contains(mouseLocation)
+        } ?? 0
+        let cursorDisplay = content.displays[cursorDisplayIndex]
+
+        // Exclude our own app windows so the kid never sees the
+        // overlay / panel / consent dialog through the snap.
+        let ownBundleIdentifier = Bundle.main.bundleIdentifier
+        let ownAppWindows = content.windows.filter { window in
+            window.owningApplication?.bundleIdentifier == ownBundleIdentifier
+        }
+
+        let filter = SCContentFilter(
+            display: cursorDisplay,
+            excludingWindows: ownAppWindows
+        )
+
+        // Capture at native pixel size; SnapEncoder will downscale to
+        // 1440px long-edge before encoding.
+        let configuration = SCStreamConfiguration()
+        configuration.width = cursorDisplay.width
+        configuration.height = cursorDisplay.height
+
+        let nativeCGImage = try await SCScreenshotManager.captureImage(
+            contentFilter: filter,
+            configuration: configuration
+        )
+
+        let encodedSnap = try SnapEncoder.encodeSnap(from: nativeCGImage)
+        return (snap: encodedSnap, screenIndex: cursorDisplayIndex)
+    }
 }

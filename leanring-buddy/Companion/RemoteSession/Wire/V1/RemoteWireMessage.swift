@@ -35,6 +35,7 @@ enum RemoteWireProtocolVersion {
 enum RemoteWireMessage: Equatable {
     case cursorCommand(envelope: RemoteWireEnvelope, payload: CursorCommand)
     case snapRequest(envelope: RemoteWireEnvelope, payload: SnapRequest)
+    case snapDelivery(envelope: RemoteWireEnvelope, payload: SnapDelivery)
     case clickConfirmation(envelope: RemoteWireEnvelope, payload: ClickConfirmation)
     case unsupported(envelope: RemoteWireEnvelope, rawKind: String)
 
@@ -42,6 +43,7 @@ enum RemoteWireMessage: Equatable {
         switch self {
         case .cursorCommand(let envelope, _): return envelope
         case .snapRequest(let envelope, _): return envelope
+        case .snapDelivery(let envelope, _): return envelope
         case .clickConfirmation(let envelope, _): return envelope
         case .unsupported(let envelope, _): return envelope
         }
@@ -96,6 +98,32 @@ struct SnapRequest: Codable, Equatable {
     /// Free-form hint surfaced for telemetry / debugging. e.g.
     /// "kid-clicked", "kid-scrolled", "session-start".
     let reason: String?
+}
+
+/// Senior -> kid. Delivers an encoded screenshot snap.
+///
+/// Phase 1 ships bytes inline as base64 inside the JSON envelope so we
+/// have a single message kind to reason about. Phase 2 may switch to
+/// a binary data-channel frame for efficiency; the envelope shape
+/// stays the same so older clients keep working.
+struct SnapDelivery: Codable, Equatable {
+    enum Format: String, Codable, Equatable {
+        case heic
+        case jpeg
+    }
+
+    /// Base64-encoded image bytes. Decoder uses
+    /// `Data(base64Encoded:)` which silently rejects malformed input;
+    /// a malformed snap ends up as a transient render failure rather
+    /// than a crash.
+    let bytesBase64: String
+    let format: Format
+    let pixelWidth: Int
+    let pixelHeight: Int
+
+    /// Zero-indexed senior screen this snap came from. Mirrors the
+    /// CursorCommand.screenIndex space so click translation lines up.
+    let screenIndex: Int
 }
 
 /// Bidirectional. Records that a click action was confirmed (or rejected).

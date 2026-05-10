@@ -97,6 +97,9 @@ enum RemoteWireMessageCodec {
         case "snap.request":
             let payload = try jsonDecoder.decode(SnapRequest.self, from: payloadData)
             return .snapRequest(envelope: envelope, payload: payload)
+        case "snap.delivery":
+            let payload = try jsonDecoder.decode(SnapDelivery.self, from: payloadData)
+            return .snapDelivery(envelope: envelope, payload: payload)
         case "click.confirmation":
             let payload = try jsonDecoder.decode(ClickConfirmation.self, from: payloadData)
             return .clickConfirmation(envelope: envelope, payload: payload)
@@ -109,6 +112,7 @@ enum RemoteWireMessageCodec {
         switch message {
         case .cursorCommand: return "cursor.command"
         case .snapRequest: return "snap.request"
+        case .snapDelivery: return "snap.delivery"
         case .clickConfirmation: return "click.confirmation"
         case .unsupported(_, let rawKind): return rawKind
         }
@@ -119,6 +123,8 @@ enum RemoteWireMessageCodec {
         case .cursorCommand(_, let payload):
             return try jsonEncoder.encode(payload)
         case .snapRequest(_, let payload):
+            return try jsonEncoder.encode(payload)
+        case .snapDelivery(_, let payload):
             return try jsonEncoder.encode(payload)
         case .clickConfirmation(_, let payload):
             return try jsonEncoder.encode(payload)
