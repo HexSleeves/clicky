@@ -33,7 +33,8 @@ struct PairingView: View {
             case .kid:
                 KidPairCodeView(
                     pairingManager: pairingManager,
-                    networkClient: networkClient
+                    networkClient: networkClient,
+                    onDismiss: onPairingCompleted
                 )
             case .senior, .none:
                 SeniorPairCodeEntryView(
@@ -54,6 +55,11 @@ private struct KidPairCodeView: View {
 
     @ObservedObject var pairingManager: PairingManager
     let networkClient: PairingNetworkClient
+    /// Called when the kid taps Done. The window controller closes
+    /// the pairing window in response. We DON'T auto-close on mint
+    /// success because the kid still needs the window open long
+    /// enough to read the code aloud and copy the session id.
+    let onDismiss: () -> Void
 
     @State private var isMinting: Bool = false
     @State private var didCopySessionId: Bool = false
@@ -100,6 +106,25 @@ private struct KidPairCodeView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isMinting)
+
+                // Once a code has been minted the kid is done with this
+                // window — code is on screen, session id can be copied,
+                // panel footer already shows "Paired ✓". Done button
+                // dismisses without losing access to the next pairing
+                // (Get a new code reissues if needed).
+                if pairingManager.activePairCode != nil {
+                    Button(action: onDismiss) {
+                        Text("Done")
+                            .font(DS.Senior.Typography.body.weight(.semibold))
+                            .foregroundColor(DS.Senior.Colors.foreground)
+                            .frame(maxWidth: .infinity, minHeight: DS.Senior.Geometry.buttonHeight)
+                            .background(
+                                RoundedRectangle(cornerRadius: DS.Senior.Geometry.buttonCornerRadius)
+                                    .stroke(DS.Senior.Colors.foreground, lineWidth: DS.Senior.Geometry.hairlineWidth)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
             }
 
             if let networkError = pairingManager.lastNetworkError {

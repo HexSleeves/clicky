@@ -206,8 +206,16 @@ final class PairingManager: ObservableObject {
             case .success(let sessionToken):
                 consecutiveWrongAttempts = 0
                 lockoutUntil = nil
-                pairedPeerToken = sessionToken
+                // ORDER MATTERS. CompanionManager observes
+                // `$pairedPeerToken` and reacts by reading
+                // `activePairId` to build the relay transport.
+                // Setting pairedPeerToken first would fire the
+                // observer before activePairId is populated → the
+                // transport guard returns early and senior never
+                // polls. Bug surfaced when "Help Mom" never reached
+                // senior. Set activePairId first.
                 activePairId = kidPairId
+                pairedPeerToken = sessionToken
             case .codeExpired:
                 activePairCode = nil
             case .codeMismatch(let triesRemaining):

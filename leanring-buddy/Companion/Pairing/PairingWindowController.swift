@@ -47,8 +47,11 @@ final class PairingWindowController: NSObject, NSWindowDelegate {
             pairingManager: pairingManager,
             networkClient: networkClient,
             onPairingCompleted: { [weak self] in
-                // Auto-close on senior-side success after a short delay
-                // so the user sees the "All set!" copy first.
+                // Senior-side: auto-close after a beat so the user
+                // gets to read the "All set!" copy before the window
+                // disappears. Kid side calls this synchronously from
+                // the Done button — the delay is fine there too,
+                // 1.5s feels intentional rather than instant.
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                     self?.closeWindow()
