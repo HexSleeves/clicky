@@ -918,6 +918,9 @@ struct CompanionPanelView: View {
             Spacer()
 
             if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
+                if shouldShowHelpRequestButton {
+                    helpRequestFooterButton
+                }
                 pairingFooterButton
                 notesFooterButton
                 // Gear / settings popover is a kid-side surface (per
@@ -928,6 +931,36 @@ struct CompanionPanelView: View {
                 }
             }
         }
+    }
+
+    /// Show the "Help Mom" button only on the kid Mac AND only once a
+    /// pair token has been issued. Senior side never sees it because
+    /// senior side never initiates help (Mom is the help-receiver).
+    private var shouldShowHelpRequestButton: Bool {
+        companionManager.roleManager.shouldShowKidSurfaces
+        && companionManager.pairingManager.pairedPeerToken != nil
+    }
+
+    private var helpRequestFooterButton: some View {
+        Button(action: {
+            companionManager.requestHelpFromPairedSenior()
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Help Mom")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                Capsule()
+                    .fill(companionManager.selectedCursorColor.displayColor)
+            )
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
     }
 
     /// Footer button that opens the pairing window. Visible while a
