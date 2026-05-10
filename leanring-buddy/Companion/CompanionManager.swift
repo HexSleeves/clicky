@@ -108,6 +108,17 @@ final class CompanionManager: ObservableObject {
         blocklistMonitor: blocklistMonitor
     )
 
+    /// Senior-side: window controller that hosts SeniorConsentDialogView
+    /// when the kid requests a help session. Lazy because most launches
+    /// won't see one and we don't want to allocate the AppKit shell up
+    /// front.
+    lazy var seniorConsentDialogWindowController = SeniorConsentDialogWindowController()
+
+    /// Kid-side: floating NSWindow that displays incoming snaps from
+    /// the senior's Mac. Lazy for the same reason. Click handler is
+    /// wired in `wireRemoteHelpSurfaces()`.
+    lazy var kidSidePreviewWindowController = KidSidePreviewWindowController()
+
     /// Persistent user-supplied memory. Surfaced into Claude's system prompt so
     /// every conversation starts with the user's saved context.
     let notesStore = NotesStore()
@@ -325,6 +336,7 @@ final class CompanionManager: ObservableObject {
         bindAudioPowerLevel()
         bindShortcutTransitions()
         wireAudioSessionCoordination()
+        wireRemoteHelpSurfaces()
         // Eagerly touch the Claude API so its TLS warmup handshake completes
         // well before the onboarding demo fires at ~40s into the video.
         _ = claudeAPI
@@ -353,6 +365,70 @@ final class CompanionManager: ObservableObject {
             if previousOwner == .pushToTalk {
                 self.buddyDictationManager.cancelCurrentDictation(preserveDraftText: true)
             }
+        }
+    }
+
+    /// Wires the kid-side preview window's click handler so taps inside
+    /// the preview translate (via PreviewClickTranslator) into wire-level
+    /// CursorCommand messages routed through RemoteSessionManager.
+    /// Called once during `start()`; the window itself only appears
+    /// when `presentKidSidePreviewIfNeeded()` runs.
+    private func wireRemoteHelpSurfaces() {
+        kidSidePreviewWindowController.onClickInSeniorPixelSpace = { [weak self] translation in
+            guard let self else { return }
+            let cursorCommand = CursorCommand(
+                x: translation.seniorScreenPixelX,
+                y: translation.seniorScreenPixelY,
+                screenIndex: translation.seniorScreenIndex,
+                label: nil
+            )
+            self.remoteSessionManager.sendCursorCommand(cursorCommand)
+        }
+    }
+
+    // MARK: - Public API for incoming remote-help requests
+
+    /// Senior-side entrypoint. Called when an incoming help request
+    /// arrives from the kid (signaling layer once WebRTC ships). Drives
+    /// the consent dialog, then forwards the resolution to
+    /// RemoteSessionManager.
+    ///
+    /// Exposed publicly so any future trigger (signaling notification,
+    /// hotword listener, debug button) can invoke the same flow.
+    func respondToIncomingRemoteHelpRequest(kidDisplayName: String) {
+        remoteSessionManager.requestSession()
+        seniorConsentDialogWindowController.presentForIncomingRequest(
+            kidName: kidDisplayName,
+            onAutoCancelWarning: { [weak self] in
+                // Phase 1 design: TTS plays at 4:30 warning Mom the
+                // request will close. Keep it short and warm.
+                self?.speakConsentTimeoutWarning()
+            },
+            onResolved: { [weak self] resolution in
+                guard let self else { return }
+                switch resolution {
+                case .accepted:
+                    self.remoteSessionManager.handleConsent(.accepted)
+                case .declined:
+                    self.remoteSessionManager.handleConsent(.declined)
+                case .timedOut:
+                    self.remoteSessionManager.handleConsent(.timedOut)
+                }
+            }
+        )
+    }
+
+    /// Kid-side entrypoint. Surfaces the preview window so the kid can
+    /// see Mom's screen as snaps stream in. Idempotent — calling twice
+    /// is safe and just brings the window forward.
+    func presentKidSidePreviewIfNeeded() {
+        kidSidePreviewWindowController.showWindow()
+    }
+
+    private func speakConsentTimeoutWarning() {
+        let warningCopy = "i'll close this in just a moment if you don't see it. take your time."
+        Task {
+            try? await elevenLabsTTSClient.speakText(warningCopy)
         }
     }
 
