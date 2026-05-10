@@ -1,11 +1,11 @@
-# Clicky - Agent Instructions
+# Milo - Agent Instructions
 
 <!-- This is the single source of truth for all AI coding agents. CLAUDE.md is a symlink to this file. -->
 <!-- AGENTS.md spec: https://github.com/agentsmd/agents.md — supported by Claude Code, Cursor, Copilot, Gemini CLI, and others. -->
 
 ## Overview
 
-macOS menu bar companion app. Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Uses push-to-talk (ctrl+option) to capture voice input, transcribes it via AssemblyAI streaming, and sends the transcript + a screenshot of the user's screen to Claude. Users can also press ctrl+command to open a floating text input panel and type to Clicky. Claude responds with text (streamed via SSE) and voice (ElevenLabs TTS). A blue cursor overlay can fly to and point at UI elements Claude references on any connected monitor.
+macOS menu bar companion app. Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Uses push-to-talk (ctrl+option) to capture voice input, transcribes it via AssemblyAI streaming, and sends the transcript + a screenshot of the user's screen to Claude. Users can also press ctrl+command to open a floating text input panel and type to Milo. Claude responds with text (streamed via SSE) and voice (ElevenLabs TTS). A blue cursor overlay can fly to and point at UI elements Claude references on any connected monitor.
 
 All API keys live on a Cloudflare Worker proxy — nothing sensitive ships in the app.
 
@@ -21,7 +21,7 @@ All API keys live on a Cloudflare Worker proxy — nothing sensitive ships in th
 - **Voice Input**: Push-to-talk via `AVAudioEngine` + pluggable transcription-provider layer. System-wide keyboard shortcut via listen-only CGEvent tap.
 - **Element Pointing**: Claude embeds `[POINT:x,y:label:screenN]` tags in responses. The overlay parses these, maps coordinates to the correct monitor, and animates the blue cursor along a bezier arc to the target.
 - **Concurrency**: `@MainActor` isolation, async/await throughout
-- **Analytics**: PostHog via `ClickyAnalytics.swift`
+- **Analytics**: PostHog via `MiloAnalytics.swift`
 - **Source Layout**: The app target uses folder-backed Xcode groups under `leanring-buddy/`: `App`, `Companion`, `AI`, `Audio`, `Analytics`, `DesignSystem`, `Resources`, and `Support`. Keep the Xcode project and scheme names unchanged.
 
 ### API Proxy (Cloudflare Worker)
@@ -43,13 +43,13 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 
 **Cursor Overlay**: A full-screen transparent `NSPanel` hosts the blue cursor companion. It's non-activating, joins all Spaces, and never steals focus. The cursor position, response text, waveform, and pointing animations all render in this overlay via SwiftUI through `NSHostingView`.
 
-**Guided Action Mode**: Clicky can turn action-intent prompts (for example, "where do I click?") into a confirmed action proposal. The app uses the existing `[POINT:x,y:label:screenN]` coordinate path to fly the cursor to the target and show a panel preview. After the user presses the panel's Click button, Clicky hides the panel and posts one left-click at the target. The panel also has an "Auto-click actions" bypass setting that skips confirmation and immediately performs that same one-click action. It does not synthesize typing, hotkeys, scroll events, or multi-step action sequences.
+**Guided Action Mode**: Milo can turn action-intent prompts (for example, "where do I click?") into a confirmed action proposal. The app uses the existing `[POINT:x,y:label:screenN]` coordinate path to fly the cursor to the target and show a panel preview. After the user presses the panel's Click button, Milo hides the panel and posts one left-click at the target. The panel also has an "Auto-click actions" bypass setting that skips confirmation and immediately performs that same one-click action. It does not synthesize typing, hotkeys, scroll events, or multi-step action sequences.
 
 **Global Push-To-Talk Shortcut**: Background push-to-talk uses a listen-only `CGEvent` tap instead of an AppKit global monitor so modifier-based shortcuts like `ctrl + option` are detected more reliably while the app is running in the background.
 
 **Shared URLSession for AssemblyAI**: A single long-lived `URLSession` is shared across all AssemblyAI streaming sessions (owned by the provider, not the session). Creating and invalidating a URLSession per session corrupts the OS connection pool and causes "Socket is not connected" errors after a few rapid reconnections.
 
-**Transient Cursor Mode**: When "Show Clicky" is off, pressing the hotkey fades in the cursor overlay for the duration of the interaction (recording → response → TTS → optional pointing), then fades it out automatically after 1 second of inactivity.
+**Transient Cursor Mode**: When "Show Milo" is off, pressing the hotkey fades in the cursor overlay for the duration of the interaction (recording → response → TTS → optional pointing), then fades it out automatically after 1 second of inactivity.
 
 ## Key Files
 
@@ -58,12 +58,12 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `leanring-buddy/App/leanring_buddyApp.swift` | ~89 | Menu bar app entry point. Uses `@NSApplicationDelegateAdaptor` with `CompanionAppDelegate` which creates `MenuBarPanelManager` and starts `CompanionManager`. No main window — the app lives entirely in the status bar. |
 | `leanring-buddy/Companion/CompanionManager.swift` | ~1500 | Central state machine. Owns dictation, shortcut monitoring, typed input, screen capture, Claude API, ElevenLabs TTS, and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, cursor color, cursor visibility, and the Notes store. Detects "remember that…" / "save note: …" intents and routes them to NotesStore instead of Claude. Coordinates the full voice/text input → screenshot → Claude → TTS → pointing pipeline. |
 | `leanring-buddy/Companion/CursorColorOption.swift` | ~55 | Enum of available cursor colors (red/blue/yellow/green) with `displayColor` and `glowColor` accessors. Drives the cursor overlay, panel logo, response bubble, and text-input pill so the chosen color reads as a single identity. |
-| `leanring-buddy/Companion/Notes/ClickyNote.swift` | ~22 | `Identifiable, Codable` struct for a single saved note (id, text, createdAt). |
-| `leanring-buddy/Companion/Notes/NotesStore.swift` | ~135 | `@MainActor` class that persists `[ClickyNote]` to `~/Library/Application Support/Clicky/notes.json`. Exposes `add` / `remove` / `systemPromptBlock()` for Claude system-prompt injection. |
+| `leanring-buddy/Companion/Notes/MiloNote.swift` | ~22 | `Identifiable, Codable` struct for a single saved note (id, text, createdAt). |
+| `leanring-buddy/Companion/Notes/NotesStore.swift` | ~135 | `@MainActor` class that persists `[MiloNote]` to `~/Library/Application Support/Milo/notes.json`. Exposes `add` / `remove` / `systemPromptBlock()` for Claude system-prompt injection. |
 | `leanring-buddy/Companion/Notes/NotesPanelView.swift` | ~210 | SwiftUI popover hosted by `MenuBarPanelManager` from the footer Notes button. Lists saved notes with delete-per-row, supports manual add, and shows empty-state copy explaining the voice phrasing. |
 | `leanring-buddy/Companion/Panel/MenuBarPanelManager.swift` | ~430 | NSStatusItem + custom NSPanel lifecycle. Creates the menu bar icon, manages the floating companion panel (show/hide/position), installs click-outside-to-dismiss monitor. Also hosts the Notes and Settings popovers spawned from the panel footer. |
 | `leanring-buddy/Companion/Panel/CompanionPanelView.swift` | ~1240 | SwiftUI panel content for the menu bar dropdown. Header (logo + Active pill + X close), permissions/onboarding UI, push-to-talk hero, guided-action preview, the cursor color picker (red/blue/yellow/green tiles), and the new footer (version • Notes • gear). Dark aesthetic using `DS` design system. |
-| `leanring-buddy/Companion/Panel/SettingsPopoverView.swift` | ~190 | Settings popover spawned from the gear icon in the panel footer. Hosts the Sonnet/Opus model picker, "DM Farza on X", "Replay onboarding", and "Quit Clicky". |
+| `leanring-buddy/Companion/Panel/SettingsPopoverView.swift` | ~190 | Settings popover spawned from the gear icon in the panel footer. Hosts the Sonnet/Opus model picker, "DM Farza on X", "Replay onboarding", and "Quit Milo". |
 | `leanring-buddy/Companion/TextInput/CompanionTextInputPanelManager.swift` | ~340 | Floating text input panel opened by ctrl+command. Coral/cursor-colored pill with a paperclip image-attach button (NSOpenPanel, multi-select), arrow-up submit, and X close. Positions near the cursor, focuses the text field, submits typed prompts (and any attached image data) to `CompanionManager`, and dismisses on outside click or Escape. |
 | `leanring-buddy/Companion/Overlay/OverlayWindow.swift` | ~881 | Full-screen transparent overlay hosting the blue cursor, response text, waveform, and spinner. Handles cursor animation, element pointing with bezier arcs, multi-monitor coordinate mapping, and fade-out transitions. |
 | `leanring-buddy/Companion/Overlay/CompanionResponseOverlay.swift` | ~217 | SwiftUI view for the response text bubble and waveform displayed next to the cursor in the overlay. |
@@ -79,7 +79,7 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `leanring-buddy/AI/OpenAIAPI.swift` | ~142 | OpenAI GPT vision API client. |
 | `leanring-buddy/Audio/TTS/ElevenLabsTTSClient.swift` | ~81 | ElevenLabs TTS client. Sends text to the Worker proxy, plays back audio via `AVAudioPlayer`. Exposes `isPlaying` for transient cursor scheduling. |
 | `leanring-buddy/DesignSystem/DesignSystem.swift` | ~880 | Design system tokens — colors, corner radii, shared styles. All UI references `DS.Colors`, `DS.CornerRadius`, etc. |
-| `leanring-buddy/Analytics/ClickyAnalytics.swift` | ~121 | PostHog analytics integration for usage tracking. |
+| `leanring-buddy/Analytics/MiloAnalytics.swift` | ~121 | PostHog analytics integration for usage tracking. |
 | `leanring-buddy/Companion/Permissions/WindowPositionManager.swift` | ~262 | Window placement logic, Screen Recording permission flow, and accessibility permission helpers. |
 | `leanring-buddy/App/Configuration/AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for non-secret app bundle values in Info.plist. |
 | `worker/src/index.ts` | ~142 | Cloudflare Worker proxy. Three routes: `/chat` (Claude), `/tts` (ElevenLabs), `/transcribe-token` (AssemblyAI temp token). |
@@ -191,7 +191,7 @@ Do NOT update this file for minor edits, bug fixes, or changes that don't affect
 GBrain is set up and synced on this machine. The agent should prefer gbrain
 over Grep when the question is semantic or when you don't know the exact
 identifier yet. Two indexed corpora available via the `gbrain` CLI:
-- This repo's code (registered as `gstack-code-clicky` source).
+- This repo's code (registered as `gstack-code-milo` source).
 - `~/.gstack/` curated memory (registered as `gstack-brain-lecoqjacob` source via the existing federation pipeline).
 
 Prefer gbrain when:

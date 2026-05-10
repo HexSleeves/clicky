@@ -50,7 +50,7 @@ struct NotesPanelView: View {
     /// never overlap the title.
     private var titleBarStrip: some View {
         HStack(spacing: 10) {
-            Text("Clicky Notes")
+            Text("Milo Notes")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(DS.Colors.textPrimary)
                 .tracking(-0.2)
@@ -58,7 +58,7 @@ struct NotesPanelView: View {
             Spacer()
 
             // Note count chip — small numeric badge so the user can see how
-            // much memory Clicky has on file at a glance.
+            // much memory Milo has on file at a glance.
             Text("\(notesStore.notes.count)")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(DS.Colors.textTertiary)
@@ -101,7 +101,7 @@ struct NotesPanelView: View {
                 .font(.system(size: 11, weight: .bold))
                 .foregroundColor(DS.Colors.textTertiary)
 
-            TextField("Add a note for Clicky to remember…", text: $newNoteText)
+            TextField("Add a note for Milo to remember…", text: $newNoteText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .foregroundColor(DS.Colors.textPrimary)
@@ -148,7 +148,7 @@ struct NotesPanelView: View {
         }
     }
 
-    private func noteRow(for savedNote: ClickyNote) -> some View {
+    private func noteRow(for savedNote: MiloNote) -> some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(savedNote.text)
@@ -166,7 +166,7 @@ struct NotesPanelView: View {
 
             Button(action: {
                 notesStore.remove(id: savedNote.id)
-                ClickyAnalytics.trackNoteDeleted()
+                MiloAnalytics.trackNoteDeleted()
             }) {
                 Image(systemName: "trash")
                     .font(.system(size: 10, weight: .semibold))
@@ -212,7 +212,7 @@ struct NotesPanelView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(DS.Colors.textPrimary)
 
-                Text("Show Clicky something you wanna keep and tell it to save it for you.")
+                Text("Show Milo something you wanna keep and tell it to save it for you.")
                     .font(.system(size: 12))
                     .foregroundColor(DS.Colors.textTertiary)
                     .multilineTextAlignment(.center)
@@ -243,7 +243,7 @@ struct NotesPanelView: View {
         let trimmedText = trimmedNewNoteText
         guard !trimmedText.isEmpty else { return }
         notesStore.add(text: trimmedText)
-        ClickyAnalytics.trackNoteSaved()
+        MiloAnalytics.trackNoteSaved()
         newNoteText = ""
         isNoteFieldFocused = true
     }
@@ -256,8 +256,8 @@ struct NotesPanelView: View {
             appropriateFor: nil,
             create: true
         ) else { return }
-        let clickyDir = appSupportDir.appendingPathComponent("Clicky", isDirectory: true)
-        try? fileManager.createDirectory(at: clickyDir, withIntermediateDirectories: true)
-        NSWorkspace.shared.activateFileViewerSelecting([clickyDir])
+        let miloDir = appSupportDir.appendingPathComponent("Milo", isDirectory: true)
+        try? fileManager.createDirectory(at: miloDir, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([miloDir])
     }
 }

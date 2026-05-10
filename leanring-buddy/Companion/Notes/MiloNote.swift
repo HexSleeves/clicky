@@ -1,14 +1,14 @@
 //
-//  ClickyNote.swift
+//  MiloNote.swift
 //  leanring-buddy
 //
 //  A single saved memory note. Persisted by NotesStore and surfaced to
-//  Claude on every prompt so Clicky has long-running user context.
+//  Claude on every prompt so Milo has long-running user context.
 //
 
 import Foundation
 
-struct ClickyNote: Identifiable, Codable, Equatable {
+struct MiloNote: Identifiable, Codable, Equatable {
     let id: UUID
     let text: String
     let createdAt: Date

@@ -2,7 +2,7 @@
 //  NotesStore.swift
 //  leanring-buddy
 //
-//  Persists user-supplied memory notes for Clicky. Notes are saved as JSON
+//  Persists user-supplied memory notes for Milo. Notes are saved as JSON
 //  under Application Support and re-loaded on launch. The store publishes
 //  changes so SwiftUI views and the Claude system-prompt builder stay in
 //  sync without explicit notification plumbing.
@@ -13,7 +13,7 @@ import Combine
 
 @MainActor
 final class NotesStore: ObservableObject {
-    @Published private(set) var notes: [ClickyNote] = []
+    @Published private(set) var notes: [MiloNote] = []
 
     /// Maximum number of notes injected into the Claude system prompt. Older
     /// notes still live on disk; this cap just prevents the prompt from
@@ -46,11 +46,11 @@ final class NotesStore: ObservableObject {
     /// stored note (or `nil` if the input was empty) so callers can chain TTS
     /// or analytics on success.
     @discardableResult
-    func add(text: String) -> ClickyNote? {
+    func add(text: String) -> MiloNote? {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return nil }
 
-        let newNote = ClickyNote(text: trimmedText)
+        let newNote = MiloNote(text: trimmedText)
         // Newest first so the panel and the Claude prompt both reflect recency.
         notes.insert(newNote, at: 0)
         persistToDisk()
@@ -88,11 +88,11 @@ final class NotesStore: ObservableObject {
 
     // MARK: - Persistence
 
-    private func loadNotesFromDisk() -> [ClickyNote] {
+    private func loadNotesFromDisk() -> [MiloNote] {
         guard FileManager.default.fileExists(atPath: storageURL.path) else { return [] }
         do {
             let data = try Data(contentsOf: storageURL)
-            return try decoder.decode([ClickyNote].self, from: data)
+            return try decoder.decode([MiloNote].self, from: data)
         } catch {
             print("⚠️ NotesStore: failed to load notes from \(storageURL.path): \(error)")
             return []
@@ -123,7 +123,7 @@ final class NotesStore: ObservableObject {
         )) ?? fileManager.temporaryDirectory
 
         return appSupportDir
-            .appendingPathComponent("Clicky", isDirectory: true)
+            .appendingPathComponent("Milo", isDirectory: true)
             .appendingPathComponent("notes.json")
     }
 }

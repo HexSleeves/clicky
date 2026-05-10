@@ -49,7 +49,7 @@ final class NotesWindowController: NSObject {
             backing: .buffered,
             defer: false
         )
-        notesWindow.title = "Clicky Notes"
+        notesWindow.title = "Milo Notes"
         // Hide the system title text — our SwiftUI header renders the title
         // and the count chip in a single row alongside the traffic lights.
         notesWindow.titleVisibility = .hidden
@@ -65,7 +65,7 @@ final class NotesWindowController: NSObject {
         notesWindow.contentView = hostingView
         notesWindow.isReleasedWhenClosed = false
         // Restore position across launches under a unique autosave name.
-        notesWindow.setFrameAutosaveName("ClickyNotesWindow")
+        notesWindow.setFrameAutosaveName("MiloNotesWindow")
 
         // Fall back to a sensible center position if no autosave exists yet.
         if notesWindow.frameAutosaveName.isEmpty || notesWindow.frame.origin == .zero {

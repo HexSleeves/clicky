@@ -4,7 +4,7 @@
 //
 //  Companion settings — the popover that opens off the gear icon in the
 //  main panel footer. Matches the row-based mockup: header, plan card with
-//  usage stats, "Upgrade to Clicky Pro" CTA, eight settings rows, version
+//  usage stats, "Upgrade to Milo Pro" CTA, eight settings rows, version
 //  footer. Notes lives in its own draggable window so it does NOT appear
 //  here.
 //
@@ -122,7 +122,7 @@ struct SettingsPopoverView: View {
 
                 // Use string interpolation for the cap so the copy stays in
                 // sync with `CompanionManager.monthlyVoiceMessageCap`.
-                Text("On the free plan you can talk to Clicky \(CompanionManager.monthlyVoiceMessageCap) times a month and send \(CompanionManager.monthlyAgentMessageCap) agent messages. Your current usage resets in \(periodResetCountdownText).")
+                Text("On the free plan you can talk to Milo \(CompanionManager.monthlyVoiceMessageCap) times a month and send \(CompanionManager.monthlyAgentMessageCap) agent messages. Your current usage resets in \(periodResetCountdownText).")
                     .font(.system(size: 11))
                     .foregroundColor(DS.Colors.textTertiary)
                     .lineSpacing(2)
@@ -131,7 +131,7 @@ struct SettingsPopoverView: View {
 
             HStack(alignment: .top, spacing: 16) {
                 planUsageColumn(
-                    title: "Talk to Clicky",
+                    title: "Talk to Milo",
                     used: companionManager.monthlyVoiceMessageCount,
                     cap: CompanionManager.monthlyVoiceMessageCap
                 )
@@ -178,7 +178,7 @@ struct SettingsPopoverView: View {
     // MARK: - Upgrade CTA
 
     private var upgradeCTA: some View {
-        // Clicky doesn't have real billing yet — this row is intentionally
+        // Milo doesn't have real billing yet — this row is intentionally
         // a no-op placeholder so the popover matches the mockup. Wire it
         // up to a real upgrade flow when paid plans ship.
         Button(action: { /* placeholder until billing ships */ }) {
@@ -193,11 +193,11 @@ struct SettingsPopoverView: View {
                     )
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Upgrade to Clicky Pro")
+                    Text("Upgrade to Milo Pro")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(.white)
 
-                    Text("You'll be able to talk to Clicky as much as you want and send up to 150 agent messages per month.")
+                    Text("You'll be able to talk to Milo as much as you want and send up to 150 agent messages per month.")
                         .font(.system(size: 11))
                         .foregroundColor(.white.opacity(0.85))
                         .lineSpacing(2)
@@ -219,7 +219,7 @@ struct SettingsPopoverView: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
-        .accessibilityLabel("Upgrade to Clicky Pro")
+        .accessibilityLabel("Upgrade to Milo Pro")
     }
 
     // MARK: - Settings Rows
@@ -243,7 +243,7 @@ struct SettingsPopoverView: View {
                 icon: "globe",
                 iconTint: DS.Colors.textSecondary,
                 title: "Connect Google Workspace",
-                subtitle: "This lets Clicky Agent interact with Google Docs, Calendar, Drive, and more.",
+                subtitle: "This lets Milo Agent interact with Google Docs, Calendar, Drive, and more.",
                 trailing: .externalLink,
                 action: { /* placeholder until Google Workspace integration ships */ }
             )
@@ -282,13 +282,13 @@ struct SettingsPopoverView: View {
                 iconTint: DS.Colors.textSecondary,
                 title: "Log Out",
                 trailing: .none,
-                action: { /* placeholder — Clicky has no auth yet */ }
+                action: { /* placeholder — Milo has no auth yet */ }
             )
 
             settingsRowCard(
                 icon: "power",
                 iconTint: DS.Colors.destructiveText,
-                title: "Quit Clicky",
+                title: "Quit Milo",
                 titleTint: DS.Colors.destructiveText,
                 trailing: .none,
                 action: {
@@ -490,7 +490,7 @@ struct SettingsPopoverView: View {
         return "\(minutes)m"
     }
 
-    /// Where Clicky's notes JSON lives. Shown on the Agent Folder row so
+    /// Where Milo's notes JSON lives. Shown on the Agent Folder row so
     /// the user can tell at a glance which directory will open in Finder.
     private var notesFolderDisplayPath: String {
         let fileManager = FileManager.default
@@ -499,17 +499,17 @@ struct SettingsPopoverView: View {
             in: .userDomainMask,
             appropriateFor: nil,
             create: false
-        ) else { return "~/Library/Application Support/Clicky" }
+        ) else { return "~/Library/Application Support/Milo" }
 
-        let clickyDir = appSupportDir.appendingPathComponent("Clicky", isDirectory: true)
+        let miloDir = appSupportDir.appendingPathComponent("Milo", isDirectory: true)
         // Replace the user's home prefix with `~` so the path stays short
         // and is readable across machines / screenshots.
         let homeURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-        let clickyPath = clickyDir.path
-        if clickyPath.hasPrefix(homeURL.path) {
-            return "~" + String(clickyPath.dropFirst(homeURL.path.count))
+        let miloPath = miloDir.path
+        if miloPath.hasPrefix(homeURL.path) {
+            return "~" + String(miloPath.dropFirst(homeURL.path.count))
         }
-        return clickyPath
+        return miloPath
     }
 
     private func revealNotesFolderInFinder() {
@@ -520,15 +520,15 @@ struct SettingsPopoverView: View {
             appropriateFor: nil,
             create: true
         ) else { return }
-        let clickyDir = appSupportDir.appendingPathComponent("Clicky", isDirectory: true)
-        try? fileManager.createDirectory(at: clickyDir, withIntermediateDirectories: true)
-        NSWorkspace.shared.activateFileViewerSelecting([clickyDir])
+        let miloDir = appSupportDir.appendingPathComponent("Milo", isDirectory: true)
+        try? fileManager.createDirectory(at: miloDir, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([miloDir])
     }
 
     private func showShortcutsAlert() {
         // Lightweight info alert until a real Shortcuts sub-screen exists.
         let alert = NSAlert()
-        alert.messageText = "Clicky Shortcuts"
+        alert.messageText = "Milo Shortcuts"
         alert.informativeText = "Push to talk: control + option\nText input: press control twice"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
@@ -537,7 +537,7 @@ struct SettingsPopoverView: View {
 
     private func openSystemPrivacySettings() {
         // Drops the user straight into the Privacy & Security pane so they
-        // can review or revoke Clicky's accessibility / mic / screen access.
+        // can review or revoke Milo's accessibility / mic / screen access.
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy") {
             NSWorkspace.shared.open(url)
         }

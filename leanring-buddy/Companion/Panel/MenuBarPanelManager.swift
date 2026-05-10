@@ -15,8 +15,8 @@ import AppKit
 import SwiftUI
 
 extension Notification.Name {
-    static let clickyDismissPanel = Notification.Name("clickyDismissPanel")
-    static let clickyShowPanel = Notification.Name("clickyShowPanel")
+    static let miloDismissPanel = Notification.Name("miloDismissPanel")
+    static let miloShowPanel = Notification.Name("miloShowPanel")
 }
 
 /// Custom NSPanel subclass that can become the key window even with
@@ -55,7 +55,7 @@ final class MenuBarPanelManager: NSObject {
         createStatusItem()
 
         dismissPanelObserver = NotificationCenter.default.addObserver(
-            forName: .clickyDismissPanel,
+            forName: .miloDismissPanel,
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -65,7 +65,7 @@ final class MenuBarPanelManager: NSObject {
         }
 
         showPanelObserver = NotificationCenter.default.addObserver(
-            forName: .clickyShowPanel,
+            forName: .miloShowPanel,
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -94,15 +94,15 @@ final class MenuBarPanelManager: NSObject {
 
         guard let button = statusItem?.button else { return }
 
-        button.image = makeClickyMenuBarIcon()
+        button.image = makeMiloMenuBarIcon()
         button.image?.isTemplate = true
         button.action = #selector(statusItemClicked)
         button.target = self
     }
 
-    /// Draws the clicky triangle as a menu bar icon. Uses the same shape
+    /// Draws the milo triangle as a menu bar icon. Uses the same shape
     /// and rotation as the in-app cursor so the menu bar icon matches.
-    private func makeClickyMenuBarIcon() -> NSImage {
+    private func makeMiloMenuBarIcon() -> NSImage {
         let iconSize: CGFloat = 18
         let image = NSImage(size: NSSize(width: iconSize, height: iconSize))
         image.lockFocus()

@@ -2,7 +2,7 @@
 //  CompanionTextInputPanelManager.swift
 //  leanring-buddy
 //
-//  Floating text input panel for typed Clicky prompts.
+//  Floating text input panel for typed Milo prompts.
 //
 
 import AppKit
@@ -19,7 +19,7 @@ final class CompanionTextInputPanelManager: NSObject {
     private var panel: NSPanel?
     private var clickOutsideMonitor: Any?
     /// Watches mouse-moved events while the panel is visible so the chip
-    /// can track the cursor (or Clicky's blue cursor) as it moves around.
+    /// can track the cursor (or Milo's blue cursor) as it moves around.
     /// Two monitors needed: global for when our app isn't key (rare while
     /// typing), local for when it is.
     private var globalMouseMoveMonitor: Any?
@@ -150,7 +150,7 @@ final class CompanionTextInputPanelManager: NSObject {
     }
 
     /// Repositions the panel near the cursor on every mouse move so the
-    /// chip "follows" the user's pointer (and Clicky's blue cursor overlay
+    /// chip "follows" the user's pointer (and Milo's blue cursor overlay
     /// since they share a position). Both global + local monitors needed
     /// because the panel takes key focus while typing.
     private func installMouseFollowMonitor() {
