@@ -17,6 +17,7 @@
 //  PairingWindowController.swift.
 //
 
+import AppKit
 import SwiftUI
 
 struct PairingView: View {
@@ -55,6 +56,7 @@ private struct KidPairCodeView: View {
     let networkClient: PairingNetworkClient
 
     @State private var isMinting: Bool = false
+    @State private var didCopySessionId: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Senior.Geometry.touchSpacing) {
@@ -80,9 +82,7 @@ private struct KidPairCodeView: View {
                         )
 
                     if let pairId = pairingManager.activePairId {
-                        Text("Session id: \(pairId.prefix(8))…")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(DS.Senior.Colors.accentCalm)
+                        sessionIdRow(pairId: pairId)
                     }
                 }
             }
@@ -111,6 +111,67 @@ private struct KidPairCodeView: View {
             Spacer()
         }
         .padding(40)
+    }
+
+    /// Full session id row with copy button. Senior side requires the
+    /// FULL Durable-Object id (64 hex chars) — truncating it to 8
+    /// stranded the user. We render it selectable so the kid can paste
+    /// into a message to Mom, plus a one-tap Copy button.
+    private func sessionIdRow(pairId: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Session id (your parent needs this too):")
+                .font(DS.Senior.Typography.hint)
+                .foregroundColor(DS.Senior.Colors.accentCalm)
+
+            HStack(alignment: .top, spacing: 12) {
+                Text(pairId)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(DS.Senior.Colors.foreground)
+                    .textSelection(.enabled)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(DS.Senior.Colors.dividerHairline, lineWidth: 1)
+                    )
+
+                Button(action: { copySessionIdToClipboard(pairId: pairId) }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: didCopySessionId
+                              ? "checkmark"
+                              : "doc.on.doc")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(didCopySessionId ? "Copied" : "Copy")
+                            .font(DS.Senior.Typography.hint.weight(.semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: DS.Senior.Geometry.buttonCornerRadius)
+                            .fill(didCopySessionId
+                                  ? DS.Senior.Colors.accentPrimary
+                                  : DS.Senior.Colors.accentCalm)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func copySessionIdToClipboard(pairId: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(pairId, forType: .string)
+        didCopySessionId = true
+        // Reset the "Copied" state after 2s so the kid can copy again
+        // if they need to paste more than once.
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            didCopySessionId = false
+        }
     }
 
     private func requestNewCode() {
