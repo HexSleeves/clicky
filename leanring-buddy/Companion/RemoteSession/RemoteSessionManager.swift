@@ -41,6 +41,7 @@ final class RemoteSessionManager: ObservableObject {
     static let defaultSnapThrottleInterval: TimeInterval = 0.5
 
     private let audioSessionCoordinator: AudioSessionCoordinator
+    private let blocklistMonitor: BlocklistMonitor?
     private let snapThrottleInterval: TimeInterval
     private var lastSnapDeliveredAt: Date?
 
@@ -50,9 +51,11 @@ final class RemoteSessionManager: ObservableObject {
 
     init(
         audioSessionCoordinator: AudioSessionCoordinator,
+        blocklistMonitor: BlocklistMonitor? = nil,
         snapThrottleInterval: TimeInterval = RemoteSessionManager.defaultSnapThrottleInterval
     ) {
         self.audioSessionCoordinator = audioSessionCoordinator
+        self.blocklistMonitor = blocklistMonitor
         self.snapThrottleInterval = snapThrottleInterval
     }
 
@@ -82,6 +85,7 @@ final class RemoteSessionManager: ObservableObject {
         switch decision {
         case .accepted:
             _ = audioSessionCoordinator.acquire(.remoteHelpDuplex)
+            blocklistMonitor?.startMonitoring()
             state = .active(startedAt: now)
         case .declined, .timedOut:
             state = .idle
@@ -102,6 +106,7 @@ final class RemoteSessionManager: ObservableObject {
         case .active:
             state = .ending
             audioSessionCoordinator.release(.remoteHelpDuplex)
+            blocklistMonitor?.stopMonitoring()
             transport?.teardown()
             transport = nil
             lastSnapDeliveredAt = nil
