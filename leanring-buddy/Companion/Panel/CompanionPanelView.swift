@@ -27,6 +27,10 @@ struct CompanionPanelView: View {
                 .background(DS.Colors.borderSubtle)
                 .padding(.horizontal, 16)
 
+            errorToastBanner
+                .padding(.horizontal, 16)
+                .padding(.top, companionManager.errorPresenter.current == nil ? 0 : 12)
+
             permissionsCopySection
                 .padding(.top, 16)
                 .padding(.horizontal, 16)
@@ -84,6 +88,27 @@ struct CompanionPanelView: View {
         }
         .frame(width: 320)
         .background(panelBackground)
+    }
+
+    // MARK: - Error Toast
+
+    @ViewBuilder
+    private var errorToastBanner: some View {
+        if let presentedError = companionManager.errorPresenter.current {
+            ErrorToastView(
+                error: presentedError,
+                onRecover: {
+                    if let suggestion = presentedError.recoverySuggestion {
+                        RecoverySuggestionHandler.perform(
+                            suggestion,
+                            presenter: companionManager.errorPresenter
+                        )
+                    }
+                },
+                onDismiss: { companionManager.errorPresenter.dismiss() }
+            )
+            .animation(.easeOut(duration: 0.2), value: presentedError)
+        }
     }
 
     // MARK: - Header

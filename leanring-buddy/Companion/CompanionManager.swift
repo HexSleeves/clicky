@@ -79,6 +79,11 @@ final class CompanionManager: ObservableObject {
     let onboardingController = OnboardingController()
     private var onboardingControllerCancellable: AnyCancellable?
 
+    /// User-facing error toaster. Service code presents MiloError values
+    /// here; the panel renders the toast and offers the recovery CTA.
+    let errorPresenter = MiloErrorPresenter()
+    private var errorPresenterCancellable: AnyCancellable?
+
     var onboardingVideoPlayer: AVPlayer? { onboardingController.videoPlayer }
     var showOnboardingVideo: Bool { onboardingController.isVideoVisible }
     var onboardingVideoOpacity: Double { onboardingController.videoOpacity }
@@ -282,6 +287,7 @@ final class CompanionManager: ObservableObject {
         startPermissionPolling()
         bindUsageBudget()
         bindOnboardingController()
+        bindErrorPresenter()
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
@@ -572,6 +578,16 @@ final class CompanionManager: ObservableObject {
         onboardingController.onVideoEnded = {
             MiloAnalytics.trackOnboardingVideoCompleted()
         }
+    }
+
+    /// Re-emits `errorPresenter.objectWillChange` so panel observers see
+    /// toast presentation through the parent companion manager binding.
+    private func bindErrorPresenter() {
+        errorPresenterCancellable = errorPresenter.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
     }
 
     private func bindVoiceStateObservation() {
