@@ -5,11 +5,25 @@
  * ships with raw API keys. Keys are stored as Cloudflare secrets.
  *
  * Routes:
- *   POST /chat  → Anthropic Messages API (streaming)
- *   POST /tts   → ElevenLabs TTS API
+ *   POST /chat              → Anthropic Messages API (streaming)
+ *   POST /tts               → ElevenLabs TTS API
+ *   POST /transcribe-token  → AssemblyAI streaming token
+ *   POST /install/register  → Issues per-install ID for signed requests
+ *
+ * Auth: T0.2 Stage A — every request is checked for the X-Milo-* signature
+ * headers and the outcome is logged + counted, but responses are NEVER
+ * rejected on signature outcome yet. Stage B flips enforcement on once
+ * the dashboard shows acceptable signed-request coverage.
  */
 
-interface Env {
+import {
+  handleInstallRegister,
+  verifySignedRequest,
+  recordSignatureOutcome,
+  type InstallStoreEnv,
+} from "./install";
+
+interface Env extends InstallStoreEnv {
   ANTHROPIC_API_KEY: string;
   ELEVENLABS_API_KEY: string;
   ELEVENLABS_VOICE_ID: string;
@@ -25,6 +39,22 @@ export default {
     }
 
     try {
+      // Install registration doesn't get the signature observation pass
+      // because the install doesn't have an ID to sign with yet.
+      if (url.pathname === "/install/register") {
+        return await handleInstallRegister(request, env);
+      }
+
+      // Stage A observation: clone the body so verification can inspect
+      // it without consuming the stream the downstream handlers need.
+      const bodyBuffer = await request.clone().arrayBuffer();
+      const outcome = await verifySignedRequest(request, bodyBuffer, env);
+      // Fire-and-forget counter bump; never blocks the response path.
+      await recordSignatureOutcome(outcome.result, env);
+      if (outcome.result === "invalid") {
+        console.warn(`[${url.pathname}] signature ${outcome.result}: ${outcome.reason}`);
+      }
+
       if (url.pathname === "/chat") {
         return await handleChat(request, env);
       }

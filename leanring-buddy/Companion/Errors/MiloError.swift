@@ -156,6 +156,43 @@ extension MiloError {
     }
 }
 
+extension MiloError {
+
+    /// Classifies an arbitrary Swift error into a MiloError case so the
+    /// catch site doesn't need to inspect error shapes itself. Used by
+    /// every response-pipeline catch site so error UI is consistent
+    /// regardless of which subsystem threw.
+    ///
+    /// Today: pattern-matches URLError and NSError code/domain. Once
+    /// T0.3's Worker error envelope ships, this is where the Worker's
+    /// `E_BUDGET`, `E_RATE_LIMIT`, etc. codes get mapped to their
+    /// matching MiloError cases.
+    static func from(_ error: any Error) -> MiloError {
+        if error is CancellationError { return .unknown } // caller should ignore
+
+        let nsError = error as NSError
+
+        // URLSession network failures.
+        if nsError.domain == NSURLErrorDomain {
+            switch nsError.code {
+            case NSURLErrorNotConnectedToInternet,
+                 NSURLErrorNetworkConnectionLost,
+                 NSURLErrorCannotConnectToHost,
+                 NSURLErrorCannotFindHost,
+                 NSURLErrorDNSLookupFailed,
+                 NSURLErrorTimedOut:
+                return .network
+            case NSURLErrorDataLengthExceedsMaximum:
+                return .payloadTooLarge
+            default:
+                return .network
+            }
+        }
+
+        return .unknown
+    }
+}
+
 struct RecoverySuggestion: Equatable {
     enum Kind: Equatable {
         case openSystemSettings

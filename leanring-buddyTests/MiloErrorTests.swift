@@ -103,6 +103,38 @@ struct MiloErrorTests {
         #expect(MiloError.ttsFailed.spokenFallback == "")
     }
 
+    // MARK: - from(_:) classification
+
+    @Test func cancellationErrorClassifiesAsUnknown() {
+        // Cancellation is "user spoke again" — caller will skip the
+        // toast path entirely, but the classifier still produces a
+        // sensible default if it slips through.
+        let result = MiloError.from(CancellationError())
+        #expect(result == .unknown)
+    }
+
+    @Test func urlErrorNotConnectedClassifiesAsNetwork() {
+        let urlError = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
+        #expect(MiloError.from(urlError) == .network)
+    }
+
+    @Test func urlErrorTimedOutClassifiesAsNetwork() {
+        let urlError = NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+        #expect(MiloError.from(urlError) == .network)
+    }
+
+    @Test func urlErrorPayloadTooLargeClassifiesCorrectly() {
+        let urlError = NSError(domain: NSURLErrorDomain, code: NSURLErrorDataLengthExceedsMaximum)
+        #expect(MiloError.from(urlError) == .payloadTooLarge)
+    }
+
+    @Test func unknownDomainErrorClassifiesAsUnknown() {
+        let weirdError = NSError(domain: "com.example.weird", code: 42)
+        #expect(MiloError.from(weirdError) == .unknown)
+    }
+
+    // MARK: - spokenFallback non-emptiness
+
     @Test func nonTTSErrorsHaveNonEmptySpokenFallback() {
         let speakable: [MiloError] = [
             .missingPermission(.microphone),

@@ -90,6 +90,16 @@ final class CompanionManager: ObservableObject {
     /// consults the same instance the UI binds to.
     let analyticsConsent = AnalyticsConsent()
 
+    /// Per-install Ed25519 keypair backed by Keychain. Drives signed
+    /// Worker requests once the Worker side enforces (Stage C). Today
+    /// (Stage A) we just register on first launch so the Worker can
+    /// dashboard the unsigned-request rate.
+    let installIdentity = InstallIdentity()
+
+    private lazy var installRegistrar: InstallRegistrar = {
+        return InstallRegistrar(identity: installIdentity, workerBaseURL: Self.workerBaseURL)
+    }()
+
     /// Set after the onboarding video ends until the user makes a
     /// consent decision. Overlay observes this to render the prompt card.
     @Published private(set) var shouldShowAnalyticsConsentPrompt: Bool = false
@@ -295,6 +305,13 @@ final class CompanionManager: ObservableObject {
         // Make the static analytics gate consult this manager's consent
         // store so granting in one place is visible everywhere.
         MiloAnalytics.consent = analyticsConsent
+
+        // Fire-and-forget install registration. Idempotent: short-circuits
+        // when we already have an install ID. Stage A is observe-only,
+        // so failure here just means the Worker logs an unsigned request.
+        Task { [weak self] in
+            await self?.installRegistrar.registerIfNeeded()
+        }
 
         refreshAllPermissions()
         print("🔑 Milo start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
@@ -1010,14 +1027,19 @@ final class CompanionManager: ObservableObject {
                 }
                 if case let .systemFallback(error) = speakOutcome {
                     MiloAnalytics.trackError(.ttsFailed, surface: "response_pipeline")
+                    // System voice already kicked in, so this is informational —
+                    // surface as a short-hold toast, not a blocking error.
+                    errorPresenter.present(.ttsFailed)
                     print("⚠️ ElevenLabs unavailable, using system voice: \(error.localizedDescription)")
                 }
             } catch is CancellationError {
                 // User spoke again — response was interrupted
             } catch {
-                MiloAnalytics.trackError(.unknown, surface: "response_pipeline")
-                print("⚠️ Companion response error: \(error)")
-                _ = await speechPipeline.speak("I hit an error while trying to answer that.")
+                let miloError = MiloError.from(error)
+                MiloAnalytics.trackError(miloError, surface: "response_pipeline")
+                errorPresenter.present(miloError)
+                print("⚠️ Companion response error [\(miloError.analyticsCode)]: \(error)")
+                _ = await speechPipeline.speak(miloError.spokenFallback)
                 voiceState = .responding
             }
 

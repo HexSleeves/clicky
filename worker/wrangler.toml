@@ -1,6 +1,26 @@
 name = "clicky-proxy"
 main = "src/index.ts"
-compatibility_date = "2024-01-01"
+# Bumped from 2024-01-01: Ed25519 verify in crypto.subtle landed
+# non-experimentally on 2024-09-23. T0.2 install signature verification
+# depends on it.
+compatibility_date = "2024-10-01"
 
 [vars]
 ELEVENLABS_VOICE_ID = "CwhRBWXzGAHq8TQ4Fs17"
+
+# Stage A install identity KV. Stores public keys keyed by install ID
+# and per-day signature-outcome counters. Binding name MUST be uppercase
+# to match src/install.ts's `env.INSTALLS`.
+[[kv_namespaces]]
+binding = "INSTALLS"
+id = "e09a5448c4da4db0aa2241ed85148cdf"
+
+# Durable Object migrations. Cloudflare requires every DO class addition
+# or removal to be tagged + appended here in order. v1 deletes the
+# orphaned PairingSessionDO class left over from earlier work that's no
+# longer in this branch — and all of its DO instances + storage with it.
+# This is irreversible. Future migrations append below; never edit a
+# prior migration once it has shipped.
+[[migrations]]
+tag = "v1"
+deleted_classes = ["PairingSessionDO"]
