@@ -24,27 +24,43 @@ enum NoteCaptureRouter {
     /// Ordered longer-prefix-first so "save note that X" matches before
     /// "save note X" — the regex engine returns the first match found in
     /// the list, not the longest.
+    ///
+    /// `separators` includes em-dash + en-dash as literal characters; we
+    /// can't use Swift's `\u{2014}` escape in raw strings (which would be
+    /// passed through verbatim and reject as invalid regex), so the
+    /// characters appear directly in the source.
+    private static let separators = "[\\s,:;.\\-—–]"
+
     private static let triggerPatterns: [String] = [
-        #"^\s*please\s+remember\s+that\b[\s,:;.\u{2014}\u{2013}\-]*"#,
-        #"^\s*please\s+remember\s+to\b[\s,:;.\u{2014}\u{2013}\-]*"#,
-        #"^\s*remember\s+that\b[\s,:;.\u{2014}\u{2013}\-]*"#,
-        #"^\s*remember\s+to\b[\s,:;.\u{2014}\u{2013}\-]*"#,
-        #"^\s*remember\s+this\b[\s,:;.\u{2014}\u{2013}\-]+"#,
-        #"^\s*remember\b[\s,:;.\u{2014}\u{2013}\-]*[:,]\s*"#,
-        #"^\s*save\s+a\s+note\s+that\b[\s,:;.\u{2014}\u{2013}\-]*"#,
-        #"^\s*save\s+a\s+note\b[\s,:;.\u{2014}\u{2013}\-]*[:,]\s*"#,
-        #"^\s*save\s+note\s+that\b[\s,:;.\u{2014}\u{2013}\-]*"#,
-        #"^\s*save\s+note\b[\s,:;.\u{2014}\u{2013}\-]+"#,
-        #"^\s*make\s+a\s+note\s+that\b[\s,:;.\u{2014}\u{2013}\-]*"#,
-        #"^\s*make\s+a\s+note\b[\s,:;.\u{2014}\u{2013}\-]*[:,]\s*"#,
-        #"^\s*note\s+that\b[\s,:;.\u{2014}\u{2013}\-]*"#,
-        #"^\s*note\b[\s,:;.\u{2014}\u{2013}\-]*[:,]\s*"#
+        "^\\s*please\\s+remember\\s+that\\b\(separators)*",
+        "^\\s*please\\s+remember\\s+to\\b\(separators)*",
+        "^\\s*remember\\s+that\\b\(separators)*",
+        "^\\s*remember\\s+to\\b\(separators)*",
+        "^\\s*remember\\s+this\\b\(separators)+",
+        "^\\s*remember\\b\(separators)*[:,]\\s*",
+        "^\\s*save\\s+a\\s+note\\s+that\\b\(separators)*",
+        "^\\s*save\\s+a\\s+note\\b\(separators)*[:,]\\s*",
+        "^\\s*save\\s+note\\s+that\\b\(separators)*",
+        "^\\s*save\\s+note\\b\(separators)+",
+        "^\\s*make\\s+a\\s+note\\s+that\\b\(separators)*",
+        "^\\s*make\\s+a\\s+note\\b\(separators)*[:,]\\s*",
+        "^\\s*note\\s+that\\b\(separators)*",
+        "^\\s*note\\b\(separators)*[:,]\\s*"
     ]
 
+    /// Compiled once at type init. `precondition` guards against silent
+    /// failure: if any pattern fails to compile, the build crashes here
+    /// at first use rather than producing an empty array that makes every
+    /// call quietly return nil.
     private static let compiledPatterns: [NSRegularExpression] = {
-        triggerPatterns.compactMap { pattern in
+        let compiled = triggerPatterns.compactMap { pattern in
             try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
         }
+        precondition(
+            compiled.count == triggerPatterns.count,
+            "NoteCaptureRouter regex patterns failed to compile: \(triggerPatterns.count - compiled.count) of \(triggerPatterns.count) invalid"
+        )
+        return compiled
     }()
 
     /// Detects a leading note-capture phrase and returns the trailing memory

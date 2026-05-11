@@ -89,7 +89,13 @@ struct UILabelCategorizerTests {
     @Test func textFieldBucketsFromMultipleSynonyms() {
         #expect(UILabelCategorizer.bucket("Email field") == .textField)
         #expect(UILabelCategorizer.bucket("Username input") == .textField)
-        #expect(UILabelCategorizer.bucket("Search box") == .textField)
+    }
+
+    @Test func searchBoxBucketsAsSearchNotTextField() {
+        // Intent wins over generic shape: "Search box" is a textField
+        // structurally, but its purpose is search. Counting it as .search
+        // is what makes the search funnel measurable.
+        #expect(UILabelCategorizer.bucket("Search box") == .search)
     }
 
     // MARK: - Edge cases

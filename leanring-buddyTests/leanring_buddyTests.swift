@@ -9,6 +9,7 @@ import AppKit
 import Testing
 @testable import Milo
 
+@MainActor
 struct leanring_buddyTests {
 
     @Test func firstPermissionRequestUsesSystemPromptOnly() async throws {
