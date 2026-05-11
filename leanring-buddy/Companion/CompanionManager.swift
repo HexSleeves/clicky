@@ -1032,63 +1032,63 @@ final class CompanionManager: ObservableObject {
                         voiceState = .idle
                     }
 
-                // Pick the screen capture matching Claude's screen number,
-                // falling back to the cursor screen if not specified.
-                let targetScreenCapture: CompanionScreenCapture? = {
-                    if let screenNumber = parseResult.screenNumber,
-                       screenNumber >= 1 && screenNumber <= screenCaptures.count {
-                        return screenCaptures[screenNumber - 1]
-                    }
-                    return screenCaptures.first(where: { $0.isCursorScreen })
-                }()
-
-                if let pointCoordinate = parseResult.coordinate,
-                   let targetScreenCapture {
-                    let displayFrame = targetScreenCapture.displayFrame
-                    let globalLocation = CoordinateTranslator.screenshotPointToAppKitGlobal(
-                        screenshotPoint: pointCoordinate,
-                        screenshotSize: CGSize(
-                            width: CGFloat(targetScreenCapture.screenshotWidthInPixels),
-                            height: CGFloat(targetScreenCapture.screenshotHeightInPixels)
-                        ),
-                        displaySize: CGSize(
-                            width: CGFloat(targetScreenCapture.displayWidthInPoints),
-                            height: CGFloat(targetScreenCapture.displayHeightInPoints)
-                        ),
-                        displayFrame: displayFrame
-                    )
-
-                    detectedElementScreenLocation = globalLocation
-                    detectedElementDisplayFrame = displayFrame
-                    MiloAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
-
-                    if isGuidedActionRequest {
-                        let targetLabel = parseResult.elementLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let displayLabel = targetLabel?.isEmpty == false ? targetLabel! : "target"
-                        let proposal = GuidedActionProposal(
-                            actionType: .clickTarget,
-                            targetScreenLocation: globalLocation,
-                            targetDisplayFrame: displayFrame,
-                            targetLabel: displayLabel,
-                            instruction: "Click \(displayLabel)",
-                            screenNumber: parseResult.screenNumber
-                        )
-                        guidedActionProposal = proposal
-                        detectedElementBubbleText = proposal.instruction
-                        MiloAnalytics.trackGuidedActionProposed()
-
-                        if isGuidedActionBypassEnabled {
-                            performGuidedActionClick()
-                        } else {
-                            NotificationCenter.default.post(name: .miloShowPanel, object: nil)
+                    // Pick the screen capture matching Claude's screen number,
+                    // falling back to the cursor screen if not specified.
+                    let targetScreenCapture: CompanionScreenCapture? = {
+                        if let screenNumber = parseResult.screenNumber,
+                           screenNumber >= 1 && screenNumber <= screenCaptures.count {
+                            return screenCaptures[screenNumber - 1]
                         }
-                    }
+                        return screenCaptures.first(where: { $0.isCursorScreen })
+                    }()
 
-                    print("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
-                } else {
-                    print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
+                    if let pointCoordinate = parseResult.coordinate,
+                       let targetScreenCapture {
+                        let displayFrame = targetScreenCapture.displayFrame
+                        let globalLocation = CoordinateTranslator.screenshotPointToAppKitGlobal(
+                            screenshotPoint: pointCoordinate,
+                            screenshotSize: CGSize(
+                                width: CGFloat(targetScreenCapture.screenshotWidthInPixels),
+                                height: CGFloat(targetScreenCapture.screenshotHeightInPixels)
+                            ),
+                            displaySize: CGSize(
+                                width: CGFloat(targetScreenCapture.displayWidthInPoints),
+                                height: CGFloat(targetScreenCapture.displayHeightInPoints)
+                            ),
+                            displayFrame: displayFrame
+                        )
+
+                        detectedElementScreenLocation = globalLocation
+                        detectedElementDisplayFrame = displayFrame
+                        MiloAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
+
+                        if isGuidedActionRequest {
+                            let targetLabel = parseResult.elementLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let displayLabel = targetLabel?.isEmpty == false ? targetLabel! : "target"
+                            let proposal = GuidedActionProposal(
+                                actionType: .clickTarget,
+                                targetScreenLocation: globalLocation,
+                                targetDisplayFrame: displayFrame,
+                                targetLabel: displayLabel,
+                                instruction: "Click \(displayLabel)",
+                                screenNumber: parseResult.screenNumber
+                            )
+                            guidedActionProposal = proposal
+                            detectedElementBubbleText = proposal.instruction
+                            MiloAnalytics.trackGuidedActionProposed()
+
+                            if isGuidedActionBypassEnabled {
+                                performGuidedActionClick()
+                            } else {
+                                NotificationCenter.default.post(name: .miloShowPanel, object: nil)
+                            }
+                        }
+
+                        print("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
+                    } else {
+                        print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
+                    }
                 }
-                } // end of `else` (legacy [POINT:...] branch)
 
                 // Save this exchange to conversation history (with the trailing
                 // tag stripped so it doesn't confuse future context)

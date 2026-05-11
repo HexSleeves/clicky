@@ -85,14 +85,45 @@ enum MiloActionStep: Equatable {
     /// True for steps that perform a destructive or hard-to-reverse
     /// action. Used by the auto-bypass guard so e.g. `type` of arbitrary
     /// text or hotkey combos never auto-fire even when the setting is on.
+    ///
+    /// Keypress safety is delegated to `Self.isSafeAutoBypassKeypress` so
+    /// the allow/deny list lives in one place and is testable in isolation.
     var isPotentiallyDangerous: Bool {
         switch self {
         case .point: return false
         case .click: return false       // single click is the original bypass-safe case
         case .type: return true         // could submit a message, paste a password, etc.
-        case .keypress: return true     // ⌘+return sends, ⌘+q quits
         case .scroll: return false
+        case let .keypress(key, modifiers):
+            return !Self.isSafeAutoBypassKeypress(key: key, modifiers: modifiers)
         }
+    }
+
+    /// Classifies a single `keypress` step as safe to auto-fire when the
+    /// user has the bypass setting on.
+    ///
+    /// TODO(user): implement the safety policy. See the call site in
+    /// `isPotentiallyDangerous` above. Return `true` for hotkeys you're
+    /// willing to fire without a confirmation panel, `false` for anything
+    /// you want to gate behind the user's explicit Run click.
+    ///
+    /// Two reasonable shapes:
+    ///   1. **Allowlist (conservative):** return `true` only for an
+    ///      explicit set like ⌘S, ⌘C, ⌘V, ⌘Z, ⌘F, ⌘A, arrow keys, page
+    ///      up/down. Everything else confirms. Failure mode: a missing
+    ///      entry annoys the user but never causes harm.
+    ///   2. **Denylist (permissive):** return `false` only for known
+    ///      destructive combos (⌘Q quit, ⌘W close, ⌘+delete, ⌘+return
+    ///      when focused in a chat app, ⌘+shift+anything except ⌘+shift+Z).
+    ///      Everything else auto-fires. Failure mode: a missing entry can
+    ///      destroy work.
+    ///
+    /// I'd recommend the allowlist — the asymmetry of failure modes
+    /// matters when the action runs on an aged-parent's machine. But
+    /// this is yours to pick.
+    static func isSafeAutoBypassKeypress(key: String, modifiers: [Modifier]) -> Bool {
+        // TODO: implement the policy here.
+        return false
     }
 }
 
