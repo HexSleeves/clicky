@@ -917,17 +917,40 @@ final class CompanionManager: ObservableObject {
                     notesBlock: notesStore.systemPromptBlock()
                 )
 
+                // Sentence-chunked TTS: stream Claude's response and fire
+                // a TTS request as soon as each sentence terminator + space
+                // arrives. The first sentence's audio plays while later
+                // sentences are still being generated, cutting perceived
+                // latency roughly in half on multi-sentence responses.
+                let sentenceSplitter = SentenceSplitter()
+                speechPipeline.setOnFirstPlaybackStarted { [weak self] in
+                    self?.voiceState = .responding
+                }
+
                 let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
                     images: labeledImages,
                     systemPrompt: combinedSystemPrompt,
                     conversationHistory: historyForAPI,
                     userPrompt: transcript,
-                    onTextChunk: { _ in
-                        // No streaming text display — spinner stays until TTS plays
+                    onTextChunk: { [weak self] chunk in
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            for sentence in sentenceSplitter.consume(chunk) {
+                                self.enqueueSentenceForTTSIfSpeakable(sentence)
+                            }
+                        }
                     }
                 )
 
                 guard !Task.isCancelled else { return }
+
+                // End-of-stream: flush the remainder (which likely contains
+                // any trailing `[POINT:...]` tag glued to the last sentence).
+                // Strip the tag, enqueue the residual spoken text if non-empty.
+                if let remainder = sentenceSplitter.flushRemainder() {
+                    let trailing = PointTagParser.parse(remainder).spokenText
+                    enqueueSentenceForTTSIfSpeakable(trailing)
+                }
 
                 // Parse the [POINT:...] tag from Claude's response
                 let parseResult = PointTagParser.parse(fullResponseText)
@@ -1016,23 +1039,23 @@ final class CompanionManager: ObservableObject {
 
                 MiloAnalytics.trackAIResponseReceived(response: spokenText)
                 incrementMonthlyAgentMessageCount()
+                // Streaming TTS already kicked off audio as sentences arrived.
+                // voiceState flipped to .responding via the
+                // setOnFirstPlaybackStarted callback. Nothing else to do
+                // here — scheduleTransientHideIfNeeded later polls
+                // speechPipeline.isPlaying to wait for the queue to drain
+                // before fading the cursor out.
 
-                // Play the response via speech pipeline (ElevenLabs primary,
-                // system fallback on failure). Switch to responding once
-                // playback has actually started.
-                let speakOutcome = await speechPipeline.speak(spokenText)
-                switch speakOutcome {
-                case .elevenLabs, .systemFallback:
-                    voiceState = .responding
-                case .skippedEmpty:
-                    break
-                }
-                if case let .systemFallback(error) = speakOutcome {
+                // Session-level fallback: if ElevenLabs rejected every
+                // chunk (paid-plan-required, etc.), `isInElevenLabsFallbackMode`
+                // is true and nothing played. Speak the full response via
+                // macOS system voice so the user hears the answer instead
+                // of silence.
+                if speechPipeline.isInElevenLabsFallbackMode && !speechPipeline.isPlaying {
                     MiloAnalytics.trackError(.ttsFailed, surface: "response_pipeline")
-                    // System voice already kicked in, so this is informational —
-                    // surface as a short-hold toast, not a blocking error.
                     errorPresenter.present(.ttsFailed)
-                    print("⚠️ ElevenLabs unavailable, using system voice: \(error.localizedDescription)")
+                    speechPipeline.speakViaSystemFallback(spokenText)
+                    voiceState = .responding
                 }
             } catch is CancellationError {
                 // User spoke again — response was interrupted
@@ -1080,6 +1103,18 @@ final class CompanionManager: ObservableObject {
             overlayWindowManager.fadeOutAndHideOverlay()
             isOverlayVisible = false
         }
+    }
+
+    /// Enqueues a single sentence into the streaming TTS queue, after a
+    /// defensive [POINT:...] strip in case Claude sneaks a tag mid-response
+    /// (the system prompt forbids this but the parser is permissive).
+    /// Empty inputs are dropped — speaking "" returns an unhelpful audio
+    /// blip and wastes a quota unit.
+    private func enqueueSentenceForTTSIfSpeakable(_ sentence: String) {
+        let cleaned = PointTagParser.parse(sentence).spokenText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return }
+        speechPipeline.enqueueSpeak(cleaned)
     }
 
 

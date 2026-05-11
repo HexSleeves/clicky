@@ -24,7 +24,7 @@ final class SpeechPipeline {
         case skippedEmpty
     }
 
-    private let elevenLabsClient: ElevenLabsTTSClient
+    let elevenLabsClient: ElevenLabsTTSClient
     private var systemSynthesizer: AVSpeechSynthesizer?
 
     /// True while ElevenLabs audio is playing. The orchestrator's transient
@@ -65,6 +65,48 @@ final class SpeechPipeline {
     func stop() {
         elevenLabsClient.stopPlayback()
         systemSynthesizer?.stopSpeaking(at: .immediate)
+    }
+
+    /// Enqueue a sentence into the streaming TTS queue. Fires the TTS
+    /// request immediately; playback happens sequentially in submission
+    /// order via AVAudioPlayer's delegate chain. Used by the response
+    /// pipeline to start the first sentence playing while later
+    /// sentences are still arriving from Claude.
+    func enqueueSpeak(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        elevenLabsClient.enqueueSpeak(trimmed)
+    }
+
+    /// Set BEFORE enqueueing the first sentence of a response. Fires
+    /// when audio for the first chunk actually starts playing — the
+    /// orchestrator uses this to flip voiceState from .processing to
+    /// .responding so the spinner becomes the speaking-cursor state.
+    func setOnFirstPlaybackStarted(_ handler: @escaping @MainActor () -> Void) {
+        elevenLabsClient.onPlaybackStarted = handler
+    }
+
+    /// Set BEFORE the response stream finishes. Fires when the queue is
+    /// fully drained + no requests remain in flight — orchestrator uses
+    /// this to drop voiceState back to .idle.
+    func setOnQueueDrained(_ handler: @escaping @MainActor () -> Void) {
+        elevenLabsClient.onQueueDrained = handler
+    }
+
+    /// True once ElevenLabs has rejected the session. Orchestrator checks
+    /// this after streaming completes to decide whether the entire
+    /// response should be re-spoken via system voice.
+    var isInElevenLabsFallbackMode: Bool {
+        elevenLabsClient.isInFallbackMode
+    }
+
+    /// Speaks `text` via the macOS system voice synthesizer — bypasses
+    /// ElevenLabs entirely. Used as the session-level fallback when the
+    /// streaming pipeline detects ElevenLabs is unusable.
+    func speakViaSystemFallback(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        startSystemFallback(trimmed)
     }
 
     private func startSystemFallback(_ text: String) {
