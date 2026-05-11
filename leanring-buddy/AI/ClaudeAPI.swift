@@ -13,10 +13,16 @@ class ClaudeAPI {
     private let apiURL: URL
     var model: String
     private let session: URLSession
+    private let identity: InstallIdentity?
 
-    init(proxyURL: String, model: String = "claude-sonnet-4-6") {
+    init(
+        proxyURL: String,
+        model: String = "claude-sonnet-4-6",
+        identity: InstallIdentity? = nil
+    ) {
         self.apiURL = URL(string: proxyURL)!
         self.model = model
+        self.identity = identity
 
         // Use .default instead of .ephemeral so TLS session tickets are cached.
         // Ephemeral sessions do a full TLS handshake on every request, which causes
@@ -149,6 +155,15 @@ class ClaudeAPI {
 
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = bodyData
+        if let identity {
+            await MainActor.run {
+                request.attachMiloSignatureHeaders(
+                    identity: identity,
+                    path: WorkerEndpoints.chatPath,
+                    body: bodyData
+                )
+            }
+        }
         let payloadMB = Double(bodyData.count) / 1_048_576.0
         print("🌐 Claude streaming request: \(String(format: "%.1f", payloadMB))MB, \(images.count) image(s)")
 
@@ -263,6 +278,15 @@ class ClaudeAPI {
 
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = bodyData
+        if let identity {
+            await MainActor.run {
+                request.attachMiloSignatureHeaders(
+                    identity: identity,
+                    path: WorkerEndpoints.chatPath,
+                    body: bodyData
+                )
+            }
+        }
         let payloadMB = Double(bodyData.count) / 1_048_576.0
         print("🌐 Claude request: \(String(format: "%.1f", payloadMB))MB, \(images.count) image(s)")
 

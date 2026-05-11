@@ -37,7 +37,7 @@ final class InstallRegistrar {
             let publicKeyBase64 = try identity.publicKeyBase64()
             let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
 
-            guard let url = URL(string: "\(workerBaseURL)/install/register") else { return }
+            guard let url = URL(string: workerBaseURL + WorkerEndpoints.installRegisterPath) else { return }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

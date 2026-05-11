@@ -33,8 +33,14 @@ final class SpeechPipeline {
     /// exposes no equivalent `isPlaying` flag we can poll cheaply).
     var isPlaying: Bool { elevenLabsClient.isPlaying }
 
-    init(workerBaseURL: String) {
-        self.elevenLabsClient = ElevenLabsTTSClient(proxyURL: "\(workerBaseURL)/tts")
+    init(
+        workerBaseURL: String = WorkerEndpoints.baseURL,
+        identity: InstallIdentity? = nil
+    ) {
+        self.elevenLabsClient = ElevenLabsTTSClient(
+            proxyURL: workerBaseURL + WorkerEndpoints.ttsPath,
+            identity: identity
+        )
     }
 
     /// Speaks `text` aloud. Tries ElevenLabs first; on failure falls back

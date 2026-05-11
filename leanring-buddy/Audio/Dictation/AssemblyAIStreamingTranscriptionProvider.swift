@@ -17,13 +17,7 @@ struct AssemblyAIStreamingTranscriptionProviderError: LocalizedError {
 }
 
 final class AssemblyAIStreamingTranscriptionProvider: BuddyTranscriptionProvider {
-    /// Base URL for the Cloudflare Worker proxy. The real API key never leaves the server.
-    private static let workerBaseURL = AppBundleConfiguration.stringValue(forKey: "WORKER_BASE_URL")
-        ?? "https://clicky-proxy.lecoqjosephjacob.workers.dev"
-
-    private static var tokenProxyURL: String {
-        "\(workerBaseURL)/transcribe-token"
-    }
+    private static var tokenProxyURL: String { WorkerEndpoints.transcribeTokenURL }
 
     let displayName = "AssemblyAI"
     let requiresSpeechRecognitionPermission = false
@@ -62,6 +56,14 @@ final class AssemblyAIStreamingTranscriptionProvider: BuddyTranscriptionProvider
     }
 
     /// Calls the Cloudflare Worker to get a short-lived AssemblyAI token.
+    ///
+    /// NOTE: This request is intentionally NOT signed with the install
+    /// identity. The provider is instantiated by `resolveProvider()` as a
+    /// static factory, which has no clean DI seam for InstallIdentity.
+    /// Acceptable because the response is a 480-second token that the
+    /// WebSocket auth re-validates against AssemblyAI directly — abuse
+    /// here doesn't unlock budgeted capacity. Revisit if/when the dictation
+    /// chain gets refactored.
     private func fetchTemporaryToken() async throws -> String {
         var request = URLRequest(url: URL(string: Self.tokenProxyURL)!)
         request.httpMethod = "POST"

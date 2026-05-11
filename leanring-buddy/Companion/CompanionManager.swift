@@ -97,7 +97,7 @@ final class CompanionManager: ObservableObject {
     let installIdentity = InstallIdentity()
 
     private lazy var installRegistrar: InstallRegistrar = {
-        return InstallRegistrar(identity: installIdentity, workerBaseURL: Self.workerBaseURL)
+        return InstallRegistrar(identity: installIdentity, workerBaseURL: WorkerEndpoints.baseURL)
     }()
 
     /// Set after the onboarding video ends until the user makes a
@@ -126,17 +126,19 @@ final class CompanionManager: ObservableObject {
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
-    /// Base URL for the Cloudflare Worker proxy. All API requests route
-    /// through this so keys never ship in the app binary.
-    private static let workerBaseURL = AppBundleConfiguration.stringValue(forKey: "WORKER_BASE_URL")
-        ?? "https://clicky-proxy.lecoqjosephjacob.workers.dev"
-
     private lazy var claudeAPI: ClaudeAPI = {
-        return ClaudeAPI(proxyURL: "\(Self.workerBaseURL)/chat", model: selectedModel)
+        return ClaudeAPI(
+            proxyURL: WorkerEndpoints.chatURL,
+            model: selectedModel,
+            identity: installIdentity
+        )
     }()
 
     private lazy var speechPipeline: SpeechPipeline = {
-        return SpeechPipeline(workerBaseURL: Self.workerBaseURL)
+        return SpeechPipeline(
+            workerBaseURL: WorkerEndpoints.baseURL,
+            identity: installIdentity
+        )
     }()
 
     /// One round-trip exchange retained for in-session memory. Surfaced
@@ -179,11 +181,11 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var isOverlayVisible: Bool = false
 
     /// The Claude model used for voice responses. Persisted to UserDefaults.
-    @Published var selectedModel: String = UserDefaults.standard.string(forKey: "selectedClaudeModel") ?? "claude-sonnet-4-6"
+    @Published var selectedModel: String = UserDefaults.standard.string(forKey: PersistenceKeys.selectedClaudeModel) ?? "claude-sonnet-4-6"
 
     func setSelectedModel(_ model: String) {
         selectedModel = model
-        UserDefaults.standard.set(model, forKey: "selectedClaudeModel")
+        UserDefaults.standard.set(model, forKey: PersistenceKeys.selectedClaudeModel)
         claudeAPI.model = model
     }
 
@@ -191,7 +193,7 @@ final class CompanionManager: ObservableObject {
     /// waveform, spinner, navigation bubbles) plus the panel logo and the
     /// floating text-input chip. Persisted so the choice survives relaunches.
     @Published var selectedCursorColor: CursorColorOption = {
-        guard let storedRawValue = UserDefaults.standard.string(forKey: "selectedCursorColor"),
+        guard let storedRawValue = UserDefaults.standard.string(forKey: PersistenceKeys.selectedCursorColor),
               let storedOption = CursorColorOption(rawValue: storedRawValue) else {
             return .blue
         }
@@ -200,7 +202,7 @@ final class CompanionManager: ObservableObject {
 
     func setSelectedCursorColor(_ cursorColor: CursorColorOption) {
         selectedCursorColor = cursorColor
-        UserDefaults.standard.set(cursorColor.rawValue, forKey: "selectedCursorColor")
+        UserDefaults.standard.set(cursorColor.rawValue, forKey: PersistenceKeys.selectedCursorColor)
     }
 
     // MARK: - Monthly Usage Tracking
@@ -241,20 +243,20 @@ final class CompanionManager: ObservableObject {
     /// User preference for whether the Milo cursor should be shown.
     /// When toggled off, the overlay is hidden and push-to-talk is disabled.
     /// Persisted to UserDefaults so the choice survives app restarts.
-    @Published var isMiloCursorEnabled: Bool = UserDefaults.standard.object(forKey: "isMiloCursorEnabled") == nil
+    @Published var isMiloCursorEnabled: Bool = UserDefaults.standard.object(forKey: PersistenceKeys.isMiloCursorEnabled) == nil
         ? true
-        : UserDefaults.standard.bool(forKey: "isMiloCursorEnabled")
+        : UserDefaults.standard.bool(forKey: PersistenceKeys.isMiloCursorEnabled)
 
-    @Published var isGuidedActionBypassEnabled: Bool = UserDefaults.standard.bool(forKey: "isGuidedActionBypassEnabled")
+    @Published var isGuidedActionBypassEnabled: Bool = UserDefaults.standard.bool(forKey: PersistenceKeys.isGuidedActionBypassEnabled)
 
     func setGuidedActionBypassEnabled(_ enabled: Bool) {
         isGuidedActionBypassEnabled = enabled
-        UserDefaults.standard.set(enabled, forKey: "isGuidedActionBypassEnabled")
+        UserDefaults.standard.set(enabled, forKey: PersistenceKeys.isGuidedActionBypassEnabled)
     }
 
     func setMiloCursorEnabled(_ enabled: Bool) {
         isMiloCursorEnabled = enabled
-        UserDefaults.standard.set(enabled, forKey: "isMiloCursorEnabled")
+        UserDefaults.standard.set(enabled, forKey: PersistenceKeys.isMiloCursorEnabled)
         transientHideTask?.cancel()
         transientHideTask = nil
 
@@ -271,12 +273,12 @@ final class CompanionManager: ObservableObject {
     /// Whether the user has completed onboarding at least once. Persisted
     /// to UserDefaults so the Start button only appears on first launch.
     var hasCompletedOnboarding: Bool {
-        get { UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") }
-        set { UserDefaults.standard.set(newValue, forKey: "hasCompletedOnboarding") }
+        get { UserDefaults.standard.bool(forKey: PersistenceKeys.hasCompletedOnboarding) }
+        set { UserDefaults.standard.set(newValue, forKey: PersistenceKeys.hasCompletedOnboarding) }
     }
 
     /// Whether the user has submitted their email during onboarding.
-    @Published var hasSubmittedEmail: Bool = UserDefaults.standard.bool(forKey: "hasSubmittedEmail")
+    @Published var hasSubmittedEmail: Bool = UserDefaults.standard.bool(forKey: PersistenceKeys.hasSubmittedEmail)
 
     /// Submits the user's email to FormSpark and identifies them in PostHog.
     func submitEmail(_ email: String) {
@@ -284,7 +286,7 @@ final class CompanionManager: ObservableObject {
         guard !trimmedEmail.isEmpty else { return }
 
         hasSubmittedEmail = true
-        UserDefaults.standard.set(true, forKey: "hasSubmittedEmail")
+        UserDefaults.standard.set(true, forKey: PersistenceKeys.hasSubmittedEmail)
 
         // Identify user in PostHog
         PostHogSDK.shared.identify(trimmedEmail, userProperties: [
@@ -494,7 +496,7 @@ final class CompanionManager: ObservableObject {
         // Screen content permission is persisted — once the user has approved the
         // SCShareableContent picker, we don't need to re-check it.
         if !hasScreenContentPermission {
-            hasScreenContentPermission = UserDefaults.standard.bool(forKey: "hasScreenContentPermission")
+            hasScreenContentPermission = UserDefaults.standard.bool(forKey: PersistenceKeys.hasScreenContentPermission)
         }
 
         if !previouslyHadAll && allPermissionsGranted {
@@ -530,7 +532,7 @@ final class CompanionManager: ObservableObject {
                     isRequestingScreenContent = false
                     guard didCapture else { return }
                     hasScreenContentPermission = true
-                    UserDefaults.standard.set(true, forKey: "hasScreenContentPermission")
+                    UserDefaults.standard.set(true, forKey: PersistenceKeys.hasScreenContentPermission)
                     MiloAnalytics.trackPermissionGranted(permission: "screen_content")
 
                     // If onboarding was already completed, show the cursor overlay now

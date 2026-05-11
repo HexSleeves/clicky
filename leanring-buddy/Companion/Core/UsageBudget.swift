@@ -27,9 +27,11 @@ final class UsageBudget: ObservableObject {
 
     private static let periodLength: TimeInterval = 60 * 60 * 24 * 30
 
-    private static let voiceCountKey = "monthlyVoiceMessageCount"
-    private static let agentCountKey = "monthlyAgentMessageCount"
-    private static let periodStartKey = "monthlyUsagePeriodStart"
+    // Forwarders to keep the rest of the file readable; PersistenceKeys
+    // is the source of truth and what's used by tests / external readers.
+    private static let voiceCountKey = PersistenceKeys.monthlyVoiceMessageCount
+    private static let agentCountKey = PersistenceKeys.monthlyAgentMessageCount
+    private static let periodStartKey = PersistenceKeys.monthlyUsagePeriodStart
 
     @Published private(set) var voiceMessageCount: Int
     @Published private(set) var agentMessageCount: Int

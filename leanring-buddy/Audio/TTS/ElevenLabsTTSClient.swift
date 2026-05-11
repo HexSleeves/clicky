@@ -22,14 +22,16 @@ struct ElevenLabsTTSClientError: LocalizedError {
 final class ElevenLabsTTSClient {
     private let proxyURL: URL
     private let session: URLSession
+    private let identity: InstallIdentity?
     private var shouldUseSystemVoiceFallback = false
 
     /// The audio player for the current TTS playback. Kept alive so the
     /// audio finishes playing even if the caller doesn't hold a reference.
     private var audioPlayer: AVAudioPlayer?
 
-    init(proxyURL: String) {
+    init(proxyURL: String, identity: InstallIdentity? = nil) {
         self.proxyURL = URL(string: proxyURL)!
+        self.identity = identity
 
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 30
@@ -58,7 +60,15 @@ final class ElevenLabsTTSClient {
             ]
         ]
 
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        request.httpBody = bodyData
+        if let identity {
+            request.attachMiloSignatureHeaders(
+                identity: identity,
+                path: WorkerEndpoints.ttsPath,
+                body: bodyData
+            )
+        }
 
         let (data, response) = try await session.data(for: request)
 

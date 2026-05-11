@@ -26,7 +26,7 @@ final class InstallIdentity {
 
     private static let keychainService = "so.clicky.milo.installIdentity"
     private static let keychainAccount = "installPrivateKey"
-    private static let installIdDefaultsKey = "miloInstallId"
+    private static let installIdDefaultsKey = PersistenceKeys.miloInstallId
 
     /// The persistent install identifier returned by the Worker's
     /// /install/register response. Nil until the first successful

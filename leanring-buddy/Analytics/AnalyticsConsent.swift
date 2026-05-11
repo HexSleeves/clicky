@@ -34,7 +34,7 @@ final class AnalyticsConsent: ObservableObject {
     @Published private(set) var state: State
 
     private let defaults: UserDefaults
-    private static let storageKey = "analyticsConsentState"
+    private static let storageKey = PersistenceKeys.analyticsConsentState
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults

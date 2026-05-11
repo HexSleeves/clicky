@@ -44,15 +44,15 @@ struct UsageBudgetTests {
         #expect(budget.agentMessageCount == 0)
         #expect(budget.periodStart == clock.now)
         // Period start was persisted so a re-init reads the same anchor.
-        #expect(defaults.double(forKey: "monthlyUsagePeriodStart") == clock.now.timeIntervalSince1970)
+        #expect(defaults.double(forKey: PersistenceKeys.monthlyUsagePeriodStart) == clock.now.timeIntervalSince1970)
     }
 
     @Test func relaunchReadsPersistedState() {
         let defaults = makeScratchDefaults()
         let originalStart = Date(timeIntervalSince1970: 1_000_000)
-        defaults.set(originalStart.timeIntervalSince1970, forKey: "monthlyUsagePeriodStart")
-        defaults.set(7, forKey: "monthlyVoiceMessageCount")
-        defaults.set(3, forKey: "monthlyAgentMessageCount")
+        defaults.set(originalStart.timeIntervalSince1970, forKey: PersistenceKeys.monthlyUsagePeriodStart)
+        defaults.set(7, forKey: PersistenceKeys.monthlyVoiceMessageCount)
+        defaults.set(3, forKey: PersistenceKeys.monthlyAgentMessageCount)
 
         let clock = TestClock(Date(timeIntervalSince1970: 1_500_000))
         let budget = UsageBudget(defaults: defaults, clock: clock.read)
@@ -73,7 +73,7 @@ struct UsageBudgetTests {
         budget.incrementVoiceMessageCount()
 
         #expect(budget.voiceMessageCount == 2)
-        #expect(defaults.integer(forKey: "monthlyVoiceMessageCount") == 2)
+        #expect(defaults.integer(forKey: PersistenceKeys.monthlyVoiceMessageCount) == 2)
     }
 
     @Test func incrementBumpsAgentCounterIndependently() {
@@ -124,7 +124,7 @@ struct UsageBudgetTests {
         #expect(budget.voiceMessageCount == 1)
         #expect(budget.agentMessageCount == 0)
         #expect(budget.periodStart == clock.now)
-        #expect(defaults.double(forKey: "monthlyUsagePeriodStart") == clock.now.timeIntervalSince1970)
+        #expect(defaults.double(forKey: PersistenceKeys.monthlyUsagePeriodStart) == clock.now.timeIntervalSince1970)
     }
 
     @Test func periodEndIsThirtyDaysAfterStart() {
