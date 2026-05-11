@@ -13,11 +13,16 @@ enum AppBundleConfiguration {
     // actor isolation = MainActor, which would otherwise make this
     // implicitly isolated.
     nonisolated static func stringValue(forKey key: String) -> String? {
-        if let value = Bundle.main.object(forInfoDictionaryKey: key) as? String {
-            let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedValue.isEmpty {
-                return trimmedValue
-            }
+        if let environmentOverride = nonEmptyStringValue(ProcessInfo.processInfo.environment[key]) {
+            return environmentOverride
+        }
+
+        if let userDefaultsOverride = nonEmptyStringValue(UserDefaults.standard.string(forKey: key)) {
+            return userDefaultsOverride
+        }
+
+        if let bundleValue = nonEmptyStringValue(Bundle.main.object(forInfoDictionaryKey: key) as? String) {
+            return bundleValue
         }
 
         guard let resourceInfoPath = Bundle.main.path(forResource: "Info", ofType: "plist"),
@@ -25,6 +30,12 @@ enum AppBundleConfiguration {
               let value = resourceInfo[key] as? String else {
             return nil
         }
+
+        return nonEmptyStringValue(value)
+    }
+
+    private nonisolated static func nonEmptyStringValue(_ value: String?) -> String? {
+        guard let value else { return nil }
 
         let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedValue.isEmpty ? nil : trimmedValue

@@ -48,6 +48,28 @@ struct InstallIdentityTests {
         #expect(identity2.installId == id)
     }
 
+    @Test func installIdIsScopedToWorkerBaseURL() {
+        let defaults = makeScratchDefaults()
+
+        let localIdentity = InstallIdentity(defaults: defaults, workerBaseURL: "http://localhost:8787")
+        localIdentity.setInstallId("local-install")
+
+        let productionIdentity = InstallIdentity(defaults: defaults, workerBaseURL: "https://milo-proxy.example.workers.dev")
+        #expect(productionIdentity.installId == nil)
+
+        let reloadedLocalIdentity = InstallIdentity(defaults: defaults, workerBaseURL: "http://localhost:8787")
+        #expect(reloadedLocalIdentity.installId == "local-install")
+    }
+
+    @Test func productionIdentityMigratesLegacyInstallId() {
+        let defaults = makeScratchDefaults()
+        defaults.set("legacy-production-install", forKey: PersistenceKeys.miloInstallId)
+
+        let identity = InstallIdentity(defaults: defaults, workerBaseURL: WorkerEndpoints.productionBaseURL)
+
+        #expect(identity.installId == "legacy-production-install")
+    }
+
     // MARK: - Signing
 
     @Test func signProducesVerifiableSignature() throws {

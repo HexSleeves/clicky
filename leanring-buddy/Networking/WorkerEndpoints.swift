@@ -8,10 +8,11 @@
 //  of sync — pointing the app at one place lets future renames touch
 //  only this file.
 //
-//  Plist key `WORKER_BASE_URL` lets each build target an environment:
+//  Config key `WORKER_BASE_URL` lets each build target an environment:
 //   - Local dev: http://localhost:8787 (via `npx wrangler dev`)
 //   - Production: https://milo-proxy.<account>.workers.dev
-//  When the key is missing, falls back to the production URL.
+//  Environment/UserDefaults overrides win over Info.plist. When the key
+//  is missing, falls back to the production URL.
 //
 
 import Foundation
@@ -23,7 +24,7 @@ import Foundation
 // here implicitly @MainActor and forbidden from default args.
 enum WorkerEndpoints {
 
-    /// Info.plist key the app reads to discover the Worker base URL.
+    /// Config key the app reads to discover the Worker base URL.
     nonisolated static let baseURLPlistKey = "WORKER_BASE_URL"
 
     /// Hardcoded fallback used when `WORKER_BASE_URL` is absent. The
@@ -31,8 +32,8 @@ enum WorkerEndpoints {
     /// will still reach a real backend.
     nonisolated static let productionBaseURL = "https://milo-proxy.lecoqjosephjacob.workers.dev"
 
-    /// Resolved base URL for the current build. Reads the plist key,
-    /// falls back to production.
+    /// Resolved base URL for the current build. Reads overrides first,
+    /// then the plist key, then falls back to production.
     nonisolated static var baseURL: String {
         AppBundleConfiguration.stringValue(forKey: baseURLPlistKey)
             ?? productionBaseURL

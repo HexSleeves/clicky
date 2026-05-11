@@ -56,5 +56,6 @@ enum PersistenceKeys {
     // MARK: - Identity + consent
 
     static let miloInstallId = "miloInstallId"
+    static let miloInstallIdByWorkerBaseURLPrefix = "miloInstallId.workerBaseURL."
     static let analyticsConsentState = "analyticsConsentState"
 }

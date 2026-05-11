@@ -27,11 +27,11 @@ final class InstallRegistrar {
         self.session = session
     }
 
-    /// Registers the install if not already registered. Idempotent and
-    /// safe to call from `start()` on every launch — short-circuits when
-    /// `identity.installId` is already set.
+    /// Registers the install if not already registered. Local Worker
+    /// development refreshes on every launch because Miniflare/KV state is
+    /// often reset while UserDefaults still has an old install ID.
     func registerIfNeeded() async {
-        guard identity.installId == nil else { return }
+        guard identity.installId == nil || shouldRefreshInstallRecordOnLaunch else { return }
 
         do {
             let publicKeyBase64 = try identity.publicKeyBase64()
@@ -72,5 +72,10 @@ final class InstallRegistrar {
             // and the Worker records that as a tracked metric.
             print("⚠️ InstallRegistrar: registration failed: \(error.localizedDescription)")
         }
+    }
+
+    private var shouldRefreshInstallRecordOnLaunch: Bool {
+        guard let url = URL(string: workerBaseURL), let host = url.host else { return false }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
     }
 }

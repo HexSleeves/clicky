@@ -99,19 +99,29 @@ ELEVENLABS_API_KEY=...
 ELEVENLABS_VOICE_ID=...
 ```
 
-Then update the proxy URLs in the Swift code to point to `http://localhost:8787` instead of the deployed Worker URL while developing. Grep for `milo-proxy` to find them all.
+To point the app at the local Worker without editing source, set a runtime override:
 
-### 3. Update the proxy URLs in the app
+```bash
+defaults write com.yourcompany.leanring-buddy WORKER_BASE_URL "http://localhost:8787"
+```
 
-The app has the Worker URL hardcoded in a few places. Search for `your-worker-name.your-subdomain.workers.dev` and replace it with your Worker URL:
+Clear the override to use the bundled production URL again:
+
+```bash
+defaults delete com.yourcompany.leanring-buddy WORKER_BASE_URL
+```
+
+You can also set `WORKER_BASE_URL=http://localhost:8787` in the Xcode scheme's environment variables for Xcode-only runs.
+
+### 3. Update the production Worker URL in the app
+
+The app has one production Worker URL fallback. Search for `milo-proxy`:
 
 ```bash
 grep -r "milo-proxy" leanring-buddy/
 ```
 
-You'll find it in:
-- `CompanionManager.swift` — Claude chat + ElevenLabs TTS
-- `AssemblyAIStreamingTranscriptionProvider.swift` — AssemblyAI token endpoint
+You'll find the fallback in `leanring-buddy/Networking/WorkerEndpoints.swift`.
 
 ### 4. Open in Xcode and run
 

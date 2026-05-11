@@ -119,7 +119,7 @@ final class CompanionManager: ObservableObject {
     /// Worker requests once the Worker side enforces (Stage C). Today
     /// (Stage A) we just register on first launch so the Worker can
     /// dashboard the unsigned-request rate.
-    let installIdentity = InstallIdentity()
+    let installIdentity = InstallIdentity(workerBaseURL: WorkerEndpoints.baseURL)
 
     private lazy var installRegistrar: InstallRegistrar = {
         return InstallRegistrar(identity: installIdentity, workerBaseURL: WorkerEndpoints.baseURL)

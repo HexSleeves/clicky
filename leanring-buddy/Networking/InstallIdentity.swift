@@ -26,12 +26,14 @@ final class InstallIdentity {
 
     private static let keychainService = "so.clicky.milo.installIdentity"
     private static let keychainAccount = "installPrivateKey"
-    private static let installIdDefaultsKey = PersistenceKeys.miloInstallId
+    private static let legacyInstallIdDefaultsKey = PersistenceKeys.miloInstallId
+    private static let installIdDefaultsKeyPrefix = PersistenceKeys.miloInstallIdByWorkerBaseURLPrefix
 
     /// The persistent install identifier returned by the Worker's
     /// /install/register response. Nil until the first successful
-    /// registration. Stored in UserDefaults — re-registration on
-    /// a fresh install is by design (new keypair = new install).
+    /// registration. Stored in UserDefaults per Worker base URL —
+    /// re-registration on a fresh install or a different Worker is by
+    /// design (new server-side store = new install record).
     private(set) var installId: String?
 
     /// In-memory copy of the private key. Loaded from Keychain on first
@@ -39,10 +41,21 @@ final class InstallIdentity {
     private var privateKey: Curve25519.Signing.PrivateKey?
 
     private let defaults: UserDefaults
+    private let installIdDefaultsKey: String
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, workerBaseURL: String = WorkerEndpoints.baseURL) {
         self.defaults = defaults
-        self.installId = defaults.string(forKey: Self.installIdDefaultsKey)
+        self.installIdDefaultsKey = Self.installIdDefaultsKey(forWorkerBaseURL: workerBaseURL)
+
+        if let installId = defaults.string(forKey: installIdDefaultsKey) {
+            self.installId = installId
+        } else if workerBaseURL == WorkerEndpoints.productionBaseURL,
+                  let legacyInstallId = defaults.string(forKey: Self.legacyInstallIdDefaultsKey) {
+            self.installId = legacyInstallId
+            defaults.set(legacyInstallId, forKey: installIdDefaultsKey)
+        } else {
+            self.installId = nil
+        }
     }
 
     /// Returns the install's private signing key. On first call, attempts
@@ -73,7 +86,14 @@ final class InstallIdentity {
     /// requests can include `X-Milo-Install: <id>`.
     func setInstallId(_ id: String) {
         installId = id
-        defaults.set(id, forKey: Self.installIdDefaultsKey)
+        defaults.set(id, forKey: installIdDefaultsKey)
+    }
+
+    private nonisolated static func installIdDefaultsKey(forWorkerBaseURL workerBaseURL: String) -> String {
+        let workerBaseURLHash = SHA256.hash(data: Data(workerBaseURL.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return installIdDefaultsKeyPrefix + workerBaseURLHash
     }
 
     /// Signs the given data with the install's private key. Used by
