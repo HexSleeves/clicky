@@ -137,27 +137,48 @@ enum DS {
         static let codeText = Color(hex: "#9DC2FF")           // Radix Blue 11 variant
 
         // ── Overlay Cursor ───────────────────────────────────────────
+        //
+        // Each cursor option ships with a `fill` (the main hue, used for
+        // the triangle, waveform, spinner, text-input pill) and a `glow`
+        // sibling that's a few notches lighter / more saturated, used for
+        // drop shadows so they read as light spillage rather than a
+        // duplicate solid fill.
+        //
+        // Naming convention: `overlayCursor<Hue>` and `overlayCursor<Hue>Glow`.
+        // Hex values are picked to read well on the dark overlay without
+        // muddying or smearing in the cursor's small footprint.
 
-        /// The blue cursor/bubble color used in OverlayWindow.
-        /// Kept distinct from the accent since it serves a different purpose
-        /// (screen overlay vs in-app UI).
+        /// Blue — the default, friendly + recognizable.
         static let overlayCursorBlue = Color(hex: "#3380FF")
-
-        /// Companion glow color tuned to read on the dark overlay without smearing.
         static let overlayCursorBlueGlow = Color(hex: "#5BA1FF")
 
-        /// Coral red cursor variant — warm, attention-grabbing.
+        /// Coral red — warm, attention-grabbing.
         static let overlayCursorRed = Color(hex: "#FF5C5C")
         static let overlayCursorRedGlow = Color(hex: "#FF8585")
 
-        /// Amber yellow cursor variant.
+        /// Amber yellow — playful, energetic.
         static let overlayCursorYellow = Color(hex: "#FFC83D")
         static let overlayCursorYellowGlow = Color(hex: "#FFD66B")
 
-        /// Emerald green cursor variant — reuses the success hue family but with a
-        /// dedicated glow value so it doesn't look like a state badge.
+        /// Emerald green — distinct from any "success" state badge.
         static let overlayCursorGreen = Color(hex: "#34D399")
         static let overlayCursorGreenGlow = Color(hex: "#5BE2B0")
+
+        /// Purple — rich + creative-feeling.
+        static let overlayCursorPurple = Color(hex: "#9D5BFF")
+        static let overlayCursorPurpleGlow = Color(hex: "#BC8AFF")
+
+        /// Orange — warmer than yellow, more confident than red.
+        static let overlayCursorOrange = Color(hex: "#FF8A3D")
+        static let overlayCursorOrangeGlow = Color(hex: "#FFA866")
+
+        /// Pink — bright, friendly, distinct from red.
+        static let overlayCursorPink = Color(hex: "#FF6BB5")
+        static let overlayCursorPinkGlow = Color(hex: "#FF94CB")
+
+        /// Teal — cool, technical, between blue and green.
+        static let overlayCursorTeal = Color(hex: "#2DD4BF")
+        static let overlayCursorTealGlow = Color(hex: "#5BE2D2")
 
         // ── Floating Button Gradient ─────────────────────────────────
 

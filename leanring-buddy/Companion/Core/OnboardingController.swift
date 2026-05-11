@@ -45,6 +45,12 @@ final class OnboardingController: ObservableObject {
     private var videoEndObserver: NSObjectProtocol?
     private var demoTimeObserver: Any?
 
+    /// The character-by-character prompt-streaming timer. Stored so the
+    /// timer-fire closure can invalidate via `self.promptStreamTimer?.invalidate()`
+    /// instead of capturing the Timer parameter, which is non-Sendable
+    /// and would error under Swift 6 strict concurrency.
+    private var promptStreamTimer: Timer?
+
     /// Closure invoked when the 40-second demo trigger fires. Owner sets
     /// this so CompanionManager can perform its vision+AI+cursor work
     /// without this controller needing to know about any of it.
@@ -166,14 +172,13 @@ final class OnboardingController: ObservableObject {
 
         var currentIndex = 0
         let message = Self.promptMessage
-        Timer.scheduledTimer(withTimeInterval: Self.promptStreamCharacterInterval, repeats: true) { [weak self] timer in
+        promptStreamTimer?.invalidate()
+        promptStreamTimer = Timer.scheduledTimer(withTimeInterval: Self.promptStreamCharacterInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self else {
-                    timer.invalidate()
-                    return
-                }
+                guard let self else { return }
                 guard currentIndex < message.count else {
-                    timer.invalidate()
+                    self.promptStreamTimer?.invalidate()
+                    self.promptStreamTimer = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + Self.promptAutoDismissSeconds) { [weak self] in
                         self?.dismissPromptIfVisible()
                     }

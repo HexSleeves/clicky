@@ -87,17 +87,30 @@ struct NavigationBubbleSizePreferenceKey: PreferenceKey {
 
 /// The buddy's behavioral mode. Controls whether it follows the cursor,
 /// is flying toward a detected UI element, or is pointing at an element.
-/// Explicit Equatable conformance at file scope keeps the synthesized
-/// conformance nonisolated so SwiftUI's `==` checks don't get tagged
-/// as MainActor-isolated by Swift 6.
-enum BuddyNavigationMode: Equatable {
+enum BuddyNavigationMode {
     /// Default — buddy follows the mouse cursor with spring animation
     case followingCursor
     /// Buddy is animating toward a detected UI element location
     case navigatingToTarget
     /// Buddy has arrived at the target and is pointing at it with a speech bubble
     case pointingAtTarget
+
+    // Explicit nonisolated conformance so the Timer callback in
+    // startTrackingCursor() can compare values without tripping
+    // Swift 6's MainActor-isolation check.
+    nonisolated static func == (lhs: BuddyNavigationMode, rhs: BuddyNavigationMode) -> Bool {
+        switch (lhs, rhs) {
+        case (.followingCursor, .followingCursor),
+             (.navigatingToTarget, .navigatingToTarget),
+             (.pointingAtTarget, .pointingAtTarget):
+            return true
+        default:
+            return false
+        }
+    }
 }
+
+extension BuddyNavigationMode: Equatable {}
 
 // SwiftUI view for the blue glowing cursor pointer.
 // Each screen gets its own BlueCursorView. The view checks whether
@@ -394,7 +407,7 @@ struct BlueCursorView: View {
             navigationAnimationTimer?.invalidate()
             companionManager.tearDownOnboardingVideo()
         }
-        .onChange(of: companionManager.detectedElementScreenLocation) { newLocation in
+        .onChange(of: companionManager.detectedElementScreenLocation) { (_: CGPoint?, newLocation: CGPoint?) in
             // When a UI element location is detected, navigate the buddy to
             // that position so it points at the element.
             guard let screenLocation = newLocation,

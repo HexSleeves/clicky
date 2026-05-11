@@ -14,6 +14,11 @@ struct CompanionPanelView: View {
     @ObservedObject var companionManager: CompanionManager
     @State private var emailInput: String = ""
 
+    /// Whether the cursor color picker grid is expanded. Collapsed by
+    /// default — the tap target is a single swatch chip, and the grid
+    /// blooms below it with a spring transition.
+    @State private var isCursorColorPickerExpanded: Bool = false
+
     /// Owners (MenuBarPanelManager) wire these closures so the footer's
     /// Notes and gear buttons can spawn the right popovers anchored under
     /// their respective triggers. Default no-op makes preview rendering safe.
@@ -877,42 +882,127 @@ struct CompanionPanelView: View {
     }
 
     // MARK: - Cursor Color Picker
+    //
+    // Two pieces: a swatch chip that's always visible and shows the
+    // current color, plus an animated grid that blooms below the chip
+    // when tapped. The expanded state is local to this view (not
+    // persisted) since "which picker is open" isn't a user preference.
 
     private var cursorColorPickerRow: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Cursor color")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(DS.Colors.textSecondary)
-                .tracking(0.1)
+            HStack {
+                Text("Cursor color")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(DS.Colors.textSecondary)
+                    .tracking(0.1)
 
-            HStack(spacing: 8) {
-                ForEach(CursorColorOption.allCases) { cursorColorOption in
-                    cursorColorTile(option: cursorColorOption)
-                }
+                Spacer()
+
+                cursorColorPickerTrigger
+            }
+
+            if isCursorColorPickerExpanded {
+                cursorColorPickerGrid
+                    .transition(
+                        .asymmetric(
+                            insertion: .scale(scale: 0.85, anchor: .topTrailing)
+                                .combined(with: .opacity),
+                            removal: .scale(scale: 0.92, anchor: .topTrailing)
+                                .combined(with: .opacity)
+                        )
+                    )
             }
         }
+        .animation(.spring(response: 0.32, dampingFraction: 0.74), value: isCursorColorPickerExpanded)
     }
 
-    private func cursorColorTile(option: CursorColorOption) -> some View {
+    /// The collapsed-state chip — shows the current color, opens the grid on tap.
+    private var cursorColorPickerTrigger: some View {
+        let selected = companionManager.selectedCursorColor
+        return Button(action: {
+            isCursorColorPickerExpanded.toggle()
+        }) {
+            HStack(spacing: 8) {
+                ZStack {
+                    Circle()
+                        .fill(selected.displayColor)
+                        .frame(width: 14, height: 14)
+                        .shadow(color: selected.glowColor.opacity(0.7), radius: 4, x: 0, y: 0)
+                }
+
+                Text(selected.displayName)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(DS.Colors.textPrimary)
+
+                Image(systemName: isCursorColorPickerExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(DS.Colors.textTertiary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: DS.CornerRadius.small, style: .continuous)
+                    .fill(DS.Colors.surface2)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.CornerRadius.small, style: .continuous)
+                    .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .accessibilityLabel("Cursor color: \(selected.displayName). Tap to change.")
+    }
+
+    /// 4×2 grid of color tiles. Stagger of `delay` makes the tiles pop in
+    /// sequentially rather than as a single block — quick, cute,
+    /// readable.
+    private var cursorColorPickerGrid: some View {
+        let columns = [
+            GridItem(.flexible(), spacing: 8),
+            GridItem(.flexible(), spacing: 8),
+            GridItem(.flexible(), spacing: 8),
+            GridItem(.flexible(), spacing: 8)
+        ]
+        return LazyVGrid(columns: columns, spacing: 8) {
+            ForEach(Array(CursorColorOption.allCases.enumerated()), id: \.element.id) { index, option in
+                cursorColorTile(option: option, gridIndex: index)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                .fill(DS.Colors.surface1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+        )
+    }
+
+    private func cursorColorTile(option: CursorColorOption, gridIndex: Int) -> some View {
         let isSelected = companionManager.selectedCursorColor == option
+        // Stagger delay tied to the option's position so tiles bloom in
+        // a wave. Capped tight so the whole grid still feels snappy.
+        let staggerDelay = Double(gridIndex) * 0.018
         return Button(action: {
             companionManager.setSelectedCursorColor(option)
+            // Deliberately don't auto-collapse — keeping the grid open
+            // lets users try multiple colors without re-tapping the chip.
+            // They close it explicitly by tapping the chip again.
         }) {
             ZStack {
-                // Tinted card background — slightly tinted by the color so the
-                // tile reads as "the home of this color" rather than a neutral chip.
                 RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                    .fill(option.displayColor.opacity(0.12))
+                    .fill(option.displayColor.opacity(isSelected ? 0.20 : 0.10))
 
-                // The triangle preview echoes the actual cursor on screen.
                 Triangle()
                     .fill(option.displayColor)
-                    .frame(width: 16, height: 16)
+                    .frame(width: 14, height: 14)
                     .rotationEffect(.degrees(20))
                     .shadow(color: option.glowColor.opacity(0.7), radius: isSelected ? 6 : 3, x: 0, y: 0)
+                    .scaleEffect(isSelected ? 1.15 : 1.0)
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 56)
+            .frame(height: 44)
             .overlay(
                 RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
                     .stroke(
@@ -925,6 +1015,8 @@ struct CompanionPanelView: View {
         .pointerCursor()
         .accessibilityLabel("\(option.displayName) cursor")
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .animation(.spring(response: 0.3, dampingFraction: 0.7).delay(staggerDelay),
+                   value: isCursorColorPickerExpanded)
         .animation(.easeOut(duration: 0.15), value: isSelected)
     }
 

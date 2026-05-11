@@ -76,17 +76,23 @@ final class OnboardingMusicPlayer {
         let volumeDecrement = player.volume / Float(Self.fadeStepCount)
         var stepsRemaining = Self.fadeStepCount
 
-        scheduledTimer = Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { [weak self] timer in
+        // Use `self.scheduledTimer?.invalidate()` instead of capturing
+        // the Timer parameter inside the @MainActor Task body — `Timer`
+        // is non-Sendable and capturing it across the Task boundary is
+        // an error under Swift 6 strict concurrency.
+        scheduledTimer = Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, let activePlayer = self.player else {
-                    timer.invalidate()
+                guard let self else { return }
+                guard let activePlayer = self.player else {
+                    self.scheduledTimer?.invalidate()
+                    self.scheduledTimer = nil
                     return
                 }
                 stepsRemaining -= 1
                 activePlayer.volume -= volumeDecrement
 
                 if stepsRemaining <= 0 {
-                    timer.invalidate()
+                    self.scheduledTimer?.invalidate()
                     activePlayer.stop()
                     self.player = nil
                     self.scheduledTimer = nil

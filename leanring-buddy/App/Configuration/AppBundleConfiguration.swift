@@ -8,7 +8,11 @@
 import Foundation
 
 enum AppBundleConfiguration {
-    static func stringValue(forKey key: String) -> String? {
+    // `nonisolated` so this helper can be called from any context —
+    // matches the WorkerEndpoints pattern. Project ships with default
+    // actor isolation = MainActor, which would otherwise make this
+    // implicitly isolated.
+    nonisolated static func stringValue(forKey key: String) -> String? {
         if let value = Bundle.main.object(forInfoDictionaryKey: key) as? String {
             let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmedValue.isEmpty {

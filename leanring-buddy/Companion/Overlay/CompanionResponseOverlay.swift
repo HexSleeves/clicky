@@ -179,7 +179,11 @@ final class CompanionResponseOverlayManager {
             context.duration = 0.4
             overlayPanel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            Task { @MainActor in
+            // Re-capture weak self explicitly so the Task body doesn't
+            // inherit a mutable `var self` from the outer closure scope
+            // (Swift 6: "Reference to captured var 'self' in
+            // concurrently-executing code").
+            Task { @MainActor [weak self] in
                 self?.hideOverlay()
             }
         })

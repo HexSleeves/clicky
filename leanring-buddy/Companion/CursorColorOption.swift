@@ -7,14 +7,29 @@
 //  plus the panel logo and the floating text-input chip so the experience
 //  reads as one identity.
 //
+//  Adding a new option: add a case in source-order (it controls grid layout
+//  in the picker), give it both a displayColor and glowColor in
+//  DesignSystem.Colors, and update displayName. CaseIterable + Codable
+//  pick up the new value automatically.
+//
+//  Don't reorder existing cases without thinking — `rawValue` is what's
+//  persisted to UserDefaults under PersistenceKeys.selectedCursorColor.
+//  Renaming a case orphans existing users' selections.
+//
 
 import SwiftUI
 
 enum CursorColorOption: String, CaseIterable, Identifiable, Codable {
+    // Ordered roughly by hue around the color wheel for a coherent
+    // picker grid: warm reds → yellows → greens → cools → cools → cools.
     case red
-    case blue
+    case orange
     case yellow
     case green
+    case teal
+    case blue
+    case purple
+    case pink
 
     var id: String { rawValue }
 
@@ -22,9 +37,13 @@ enum CursorColorOption: String, CaseIterable, Identifiable, Codable {
     var displayName: String {
         switch self {
         case .red: return "Red"
-        case .blue: return "Blue"
+        case .orange: return "Orange"
         case .yellow: return "Yellow"
         case .green: return "Green"
+        case .teal: return "Teal"
+        case .blue: return "Blue"
+        case .purple: return "Purple"
+        case .pink: return "Pink"
         }
     }
 
@@ -33,9 +52,13 @@ enum CursorColorOption: String, CaseIterable, Identifiable, Codable {
     var displayColor: Color {
         switch self {
         case .red: return DS.Colors.overlayCursorRed
-        case .blue: return DS.Colors.overlayCursorBlue
+        case .orange: return DS.Colors.overlayCursorOrange
         case .yellow: return DS.Colors.overlayCursorYellow
         case .green: return DS.Colors.overlayCursorGreen
+        case .teal: return DS.Colors.overlayCursorTeal
+        case .blue: return DS.Colors.overlayCursorBlue
+        case .purple: return DS.Colors.overlayCursorPurple
+        case .pink: return DS.Colors.overlayCursorPink
         }
     }
 
@@ -44,9 +67,13 @@ enum CursorColorOption: String, CaseIterable, Identifiable, Codable {
     var glowColor: Color {
         switch self {
         case .red: return DS.Colors.overlayCursorRedGlow
-        case .blue: return DS.Colors.overlayCursorBlueGlow
+        case .orange: return DS.Colors.overlayCursorOrangeGlow
         case .yellow: return DS.Colors.overlayCursorYellowGlow
         case .green: return DS.Colors.overlayCursorGreenGlow
+        case .teal: return DS.Colors.overlayCursorTealGlow
+        case .blue: return DS.Colors.overlayCursorBlueGlow
+        case .purple: return DS.Colors.overlayCursorPurpleGlow
+        case .pink: return DS.Colors.overlayCursorPinkGlow
         }
     }
 }

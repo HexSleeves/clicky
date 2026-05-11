@@ -16,19 +16,24 @@
 
 import Foundation
 
+// Members are explicitly `nonisolated` so they can be referenced as
+// default-argument values + read from non-MainActor contexts (URLSession
+// callbacks, network clients). The project ships with default actor
+// isolation set to MainActor, which would otherwise make every static
+// here implicitly @MainActor and forbidden from default args.
 enum WorkerEndpoints {
 
     /// Info.plist key the app reads to discover the Worker base URL.
-    static let baseURLPlistKey = "WORKER_BASE_URL"
+    nonisolated static let baseURLPlistKey = "WORKER_BASE_URL"
 
     /// Hardcoded fallback used when `WORKER_BASE_URL` is absent. The
     /// production worker URL — rebuilding the app without the plist key
     /// will still reach a real backend.
-    static let productionBaseURL = "https://milo-proxy.lecoqjosephjacob.workers.dev"
+    nonisolated static let productionBaseURL = "https://milo-proxy.lecoqjosephjacob.workers.dev"
 
     /// Resolved base URL for the current build. Reads the plist key,
     /// falls back to production.
-    static var baseURL: String {
+    nonisolated static var baseURL: String {
         AppBundleConfiguration.stringValue(forKey: baseURLPlistKey)
             ?? productionBaseURL
     }
@@ -40,17 +45,17 @@ enum WorkerEndpoints {
     // exact strings — any rename here MUST be matched on the Worker side
     // in the same commit.
 
-    static let chatPath = "/chat"
-    static let ttsPath = "/tts"
-    static let transcribeTokenPath = "/transcribe-token"
-    static let installRegisterPath = "/install/register"
+    nonisolated static let chatPath = "/chat"
+    nonisolated static let ttsPath = "/tts"
+    nonisolated static let transcribeTokenPath = "/transcribe-token"
+    nonisolated static let installRegisterPath = "/install/register"
 
     // MARK: - Composed URLs
     //
     // Convenience accessors for the routes the app actually hits.
 
-    static var chatURL: String { baseURL + chatPath }
-    static var ttsURL: String { baseURL + ttsPath }
-    static var transcribeTokenURL: String { baseURL + transcribeTokenPath }
-    static var installRegisterURL: String { baseURL + installRegisterPath }
+    nonisolated static var chatURL: String { baseURL + chatPath }
+    nonisolated static var ttsURL: String { baseURL + ttsPath }
+    nonisolated static var transcribeTokenURL: String { baseURL + transcribeTokenPath }
+    nonisolated static var installRegisterURL: String { baseURL + installRegisterPath }
 }
