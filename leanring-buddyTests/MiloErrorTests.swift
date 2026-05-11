@@ -10,7 +10,7 @@
 //
 
 import Testing
-@testable import leanring_buddy
+@testable import Milo
 
 struct MiloErrorTests {
 

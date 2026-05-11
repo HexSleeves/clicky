@@ -9,7 +9,7 @@
 
 import Testing
 import Foundation
-@testable import leanring_buddy
+@testable import Milo
 
 @MainActor
 struct UsageBudgetTests {

@@ -8,7 +8,7 @@
 
 import Testing
 import CoreGraphics
-@testable import leanring_buddy
+@testable import Milo
 
 struct PointTagParserTests {
 

@@ -2,14 +2,28 @@
 //  MiloAnalytics.swift
 //  leanring-buddy
 //
-//  Centralized PostHog analytics wrapper. All event names and properties
-//  are defined here so instrumentation is consistent and easy to audit.
+//  Centralized PostHog wrapper. Every event flows through `capture(...)`,
+//  which consults `AnalyticsConsent` before firing. Only the pre-decision
+//  allowlist (`app_opened`, `onboarding_video_completed`) fires before
+//  the user answers the consent prompt — those carry only version /
+//  empty payloads.
+//
+//  PII rules:
+//  - Free-text user content (transcripts, responses, element labels,
+//    error.localizedDescription) MUST NOT appear in any property.
+//  - Use UILabelCategorizer to bucket labels into UICategory before sending.
+//  - Errors are tracked by MiloError.analyticsCode (stable, enumerated).
 //
 
 import Foundation
 import PostHog
 
+@MainActor
 enum MiloAnalytics {
+
+    /// Set once in app launch so `capture(...)` can gate sends on the
+    /// user's consent decision. Tests can inject a fresh instance.
+    static var consent: AnalyticsConsent = AnalyticsConsent()
 
     // MARK: - Setup
 
@@ -21,137 +35,126 @@ enum MiloAnalytics {
         PostHogSDK.shared.setup(config)
     }
 
+    /// Central gate. Every event in this file routes through here. The
+    /// gate is the single auditable point where consent is consulted.
+    private static func capture(_ eventName: String, properties: [String: Any]? = nil) {
+        switch consent.state {
+        case .granted:
+            PostHogSDK.shared.capture(eventName, properties: properties)
+        case .undecided where AnalyticsConsent.preDecisionAllowlist.contains(eventName):
+            PostHogSDK.shared.capture(eventName, properties: properties)
+        case .undecided, .denied:
+            return
+        }
+    }
+
     // MARK: - App Lifecycle
 
     /// Fired once on every app launch in applicationDidFinishLaunching.
+    /// Pre-decision allowlisted — only carries app version.
     static func trackAppOpened() {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
-        PostHogSDK.shared.capture("app_opened", properties: [
-            "app_version": version
-        ])
+        capture("app_opened", properties: ["app_version": version])
     }
 
     // MARK: - Onboarding
 
-    /// User clicked the Start button to begin onboarding for the first time.
     static func trackOnboardingStarted() {
-        PostHogSDK.shared.capture("onboarding_started")
+        capture("onboarding_started")
     }
 
-    /// User clicked "Watch Onboarding Again" from the panel footer.
     static func trackOnboardingReplayed() {
-        PostHogSDK.shared.capture("onboarding_replayed")
+        capture("onboarding_replayed")
     }
 
-    /// The onboarding video finished playing to the end.
+    /// Pre-decision allowlisted — fires at the moment the consent
+    /// prompt is about to appear, so the funnel "video → consent answer"
+    /// is measurable without leaking user content.
     static func trackOnboardingVideoCompleted() {
-        PostHogSDK.shared.capture("onboarding_video_completed")
+        capture("onboarding_video_completed")
     }
 
-    /// The 40s onboarding demo interaction where Milo points at something.
     static func trackOnboardingDemoTriggered() {
-        PostHogSDK.shared.capture("onboarding_demo_triggered")
+        capture("onboarding_demo_triggered")
+    }
+
+    /// User answered the analytics consent prompt. Fires only after
+    /// `consent.grant()`, so this is always allowed by the gate.
+    static func trackAnalyticsConsentDecided(granted: Bool) {
+        capture("analytics_consent_decided", properties: ["granted": granted])
     }
 
     // MARK: - Permissions
 
-    /// All three permissions (accessibility, screen recording, mic) are granted.
     static func trackAllPermissionsGranted() {
-        PostHogSDK.shared.capture("all_permissions_granted")
+        capture("all_permissions_granted")
     }
 
-    /// A single permission was granted. Called when polling detects a change.
     static func trackPermissionGranted(permission: String) {
-        PostHogSDK.shared.capture("permission_granted", properties: [
-            "permission": permission
-        ])
+        capture("permission_granted", properties: ["permission": permission])
     }
 
     // MARK: - Voice Interaction
 
-    /// User pressed the push-to-talk shortcut (control+option) to start talking.
     static func trackPushToTalkStarted() {
-        PostHogSDK.shared.capture("push_to_talk_started")
+        capture("push_to_talk_started")
     }
 
-    /// User released the shortcut — transcript is being finalized.
     static func trackPushToTalkReleased() {
-        PostHogSDK.shared.capture("push_to_talk_released")
+        capture("push_to_talk_released")
     }
 
-    /// Transcription completed and the user's message is being sent to the AI.
     static func trackUserMessageSent(transcript: String) {
-        PostHogSDK.shared.capture("user_message_sent", properties: [
-            "character_count": transcript.count
-        ])
+        capture("user_message_sent", properties: ["character_count": transcript.count])
     }
 
-    /// Claude responded and the response is being spoken via TTS.
     static func trackAIResponseReceived(response: String) {
-        PostHogSDK.shared.capture("ai_response_received", properties: [
-            "character_count": response.count
-        ])
+        capture("ai_response_received", properties: ["character_count": response.count])
     }
 
-    /// Claude's response included a [POINT:x,y:label] coordinate tag,
-    /// so the buddy is flying to point at a UI element.
+    /// Claude's response included a [POINT:...] tag. Raw label is
+    /// bucketed via UILabelCategorizer before leaving the device.
     static func trackElementPointed(elementLabel: String?) {
-        PostHogSDK.shared.capture("element_pointed", properties: [
-            "element_label": elementLabel ?? "unknown"
-        ])
+        let category = UILabelCategorizer.bucket(elementLabel)
+        capture("element_pointed", properties: ["element_category": category.rawValue])
     }
 
     static func trackGuidedActionProposed() {
-        PostHogSDK.shared.capture("guided_action_proposed", properties: [
-            "action_type": "click_target"
-        ])
+        capture("guided_action_proposed", properties: ["action_type": "click_target"])
     }
 
     static func trackGuidedActionDone() {
-        PostHogSDK.shared.capture("guided_action_done", properties: [
-            "action_type": "click_target"
-        ])
+        capture("guided_action_done", properties: ["action_type": "click_target"])
     }
 
     static func trackGuidedActionClicked() {
-        PostHogSDK.shared.capture("guided_action_clicked", properties: [
-            "action_type": "click_target"
-        ])
+        capture("guided_action_clicked", properties: ["action_type": "click_target"])
     }
 
     static func trackGuidedActionCancelled() {
-        PostHogSDK.shared.capture("guided_action_cancelled", properties: [
-            "action_type": "click_target"
-        ])
+        capture("guided_action_cancelled", properties: ["action_type": "click_target"])
     }
 
     static func trackNoteSaved() {
-        PostHogSDK.shared.capture("note_saved")
+        capture("note_saved")
     }
 
     static func trackNoteDeleted() {
-        PostHogSDK.shared.capture("note_deleted")
+        capture("note_deleted")
     }
 
-    /// User pressed the Clear button in Settings to wipe in-session
-    /// conversation history.
     static func trackConversationCleared() {
-        PostHogSDK.shared.capture("conversation_cleared")
+        capture("conversation_cleared")
     }
 
     // MARK: - Errors
 
-    /// An error occurred during the AI response pipeline.
-    static func trackResponseError(error: String) {
-        PostHogSDK.shared.capture("response_error", properties: [
-            "error": error
-        ])
-    }
-
-    /// An error occurred during TTS playback.
-    static func trackTTSError(error: String) {
-        PostHogSDK.shared.capture("tts_error", properties: [
-            "error": error
+    /// Tracks a typed MiloError. `analyticsCode` is stable per case and
+    /// never contains free-text user content.
+    static func trackError(_ error: MiloError, surface: String) {
+        capture("milo_error", properties: [
+            "error_code": error.analyticsCode,
+            "surface": surface
         ])
     }
 }

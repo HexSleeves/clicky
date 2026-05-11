@@ -84,6 +84,16 @@ final class CompanionManager: ObservableObject {
     let errorPresenter = MiloErrorPresenter()
     private var errorPresenterCancellable: AnyCancellable?
 
+    /// Persistent analytics consent state. Drives `MiloAnalytics.capture`'s
+    /// gate. Pre-decision allowlist still fires (app_opened, video done).
+    /// Assigned to `MiloAnalytics.consent` on `start()` so the static enum
+    /// consults the same instance the UI binds to.
+    let analyticsConsent = AnalyticsConsent()
+
+    /// Set after the onboarding video ends until the user makes a
+    /// consent decision. Overlay observes this to render the prompt card.
+    @Published private(set) var shouldShowAnalyticsConsentPrompt: Bool = false
+
     var onboardingVideoPlayer: AVPlayer? { onboardingController.videoPlayer }
     var showOnboardingVideo: Bool { onboardingController.isVideoVisible }
     var onboardingVideoOpacity: Double { onboardingController.videoOpacity }
@@ -282,6 +292,10 @@ final class CompanionManager: ObservableObject {
     }
 
     func start() {
+        // Make the static analytics gate consult this manager's consent
+        // store so granting in one place is visible everywhere.
+        MiloAnalytics.consent = analyticsConsent
+
         refreshAllPermissions()
         print("🔑 Milo start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
@@ -575,9 +589,30 @@ final class CompanionManager: ObservableObject {
             self?.performOnboardingDemoInteraction()
         }
 
-        onboardingController.onVideoEnded = {
+        onboardingController.onVideoEnded = { [weak self] in
             MiloAnalytics.trackOnboardingVideoCompleted()
+            self?.surfaceAnalyticsConsentPromptIfNeeded()
         }
+    }
+
+    /// Shows the consent card when the user hasn't decided yet. Called
+    /// from the onboarding video's end callback so timing is "after video
+    /// ends, before the post-video interactive moment", per the locked
+    /// T0.5 design decision.
+    private func surfaceAnalyticsConsentPromptIfNeeded() {
+        guard analyticsConsent.state == .undecided else { return }
+        shouldShowAnalyticsConsentPrompt = true
+    }
+
+    /// Called from the consent prompt's Grant/Deny buttons.
+    func handleAnalyticsConsentDecision(granted: Bool) {
+        if granted {
+            analyticsConsent.grant()
+        } else {
+            analyticsConsent.deny()
+        }
+        shouldShowAnalyticsConsentPrompt = false
+        MiloAnalytics.trackAnalyticsConsentDecided(granted: granted)
     }
 
     /// Re-emits `errorPresenter.objectWillChange` so panel observers see
@@ -974,13 +1009,13 @@ final class CompanionManager: ObservableObject {
                     break
                 }
                 if case let .systemFallback(error) = speakOutcome {
-                    MiloAnalytics.trackTTSError(error: error.localizedDescription)
+                    MiloAnalytics.trackError(.ttsFailed, surface: "response_pipeline")
                     print("⚠️ ElevenLabs unavailable, using system voice: \(error.localizedDescription)")
                 }
             } catch is CancellationError {
                 // User spoke again — response was interrupted
             } catch {
-                MiloAnalytics.trackResponseError(error: error.localizedDescription)
+                MiloAnalytics.trackError(.unknown, surface: "response_pipeline")
                 print("⚠️ Companion response error: \(error)")
                 _ = await speechPipeline.speak("I hit an error while trying to answer that.")
                 voiceState = .responding

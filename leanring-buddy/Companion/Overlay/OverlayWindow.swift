@@ -233,6 +233,22 @@ struct BlueCursorView: View {
                 .animation(.easeInOut(duration: 2.0), value: companionManager.onboardingVideoOpacity)
                 .allowsHitTesting(false)
 
+            // Analytics consent prompt — fires post-video, gates the prompt
+            // stream behind a decision so the funnel "video → consent" is
+            // measurable and the user controls what gets sent.
+            if isCursorOnThisScreen && companionManager.shouldShowAnalyticsConsentPrompt {
+                AnalyticsConsentPromptView(
+                    onGrant: { companionManager.handleAnalyticsConsentDecision(granted: true) },
+                    onDeny: { companionManager.handleAnalyticsConsentDecision(granted: false) }
+                )
+                .position(
+                    x: cursorPosition.x,
+                    y: cursorPosition.y + 80
+                )
+                .transition(.scale(scale: 0.95).combined(with: .opacity))
+                .animation(.easeOut(duration: 0.25), value: companionManager.shouldShowAnalyticsConsentPrompt)
+            }
+
             // Onboarding prompt — "press control + option and say hi" streamed after video ends
             if isCursorOnThisScreen && companionManager.showOnboardingPrompt && !companionManager.onboardingPromptText.isEmpty {
                 Text(companionManager.onboardingPromptText)
