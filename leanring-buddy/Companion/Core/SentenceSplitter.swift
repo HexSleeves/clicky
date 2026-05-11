@@ -64,10 +64,73 @@ final class SentenceSplitter {
     /// Pattern: terminator `[.!?]` followed by one or more whitespace
     /// characters. The whitespace is consumed as part of the boundary
     /// so the next sentence starts with text.
+    ///
+    /// Suppresses splits inside a `[ACTION:{...}]` trailing tag — the JSON
+    /// payload routinely contains sentence-terminator characters (e.g.
+    /// `"text":"on my way!"`) that we don't want to flush to TTS as
+    /// independent "sentences". Once `[ACTION:` appears we wait for the
+    /// matching `]` before considering any further terminators.
     private func nextSentenceEnd(in text: String) -> String.Index? {
         let terminators: Set<Character> = [".", "!", "?"]
         var index = text.startIndex
+        // Tag-suppression state: once we cross `[ACTION:` we treat the
+        // entire JSON payload through the matching `]` as opaque so
+        // sentence terminators inside the payload don't fire a flush.
+        // String + brace + bracket tracking mirrors MiloActionParser so
+        // a `]` inside a JSON string doesn't exit suppression early.
+        var inActionTag = false
+        var bracketDepth = 0
+        var braceDepth = 0
+        var inString = false
+        var escapeNext = false
+
         while index < text.endIndex {
+            // Detect "[ACTION:" prefix to enter tag-suppression mode.
+            if !inActionTag && text[index] == "[" {
+                let actionPrefix = "[ACTION:"
+                if text.distance(from: index, to: text.endIndex) >= actionPrefix.count {
+                    let prefixEnd = text.index(index, offsetBy: actionPrefix.count)
+                    if text[index..<prefixEnd] == actionPrefix {
+                        inActionTag = true
+                        bracketDepth = 1
+                        braceDepth = 0
+                        inString = false
+                        escapeNext = false
+                        index = prefixEnd
+                        continue
+                    }
+                }
+            }
+
+            if inActionTag {
+                let char = text[index]
+                if escapeNext {
+                    escapeNext = false
+                } else if inString {
+                    if char == "\\" {
+                        escapeNext = true
+                    } else if char == "\"" {
+                        inString = false
+                    }
+                } else {
+                    switch char {
+                    case "\"": inString = true
+                    case "{": braceDepth += 1
+                    case "}": braceDepth -= 1
+                    case "[": bracketDepth += 1
+                    case "]":
+                        bracketDepth -= 1
+                        if bracketDepth == 0 && braceDepth == 0 {
+                            inActionTag = false
+                        }
+                    default:
+                        break
+                    }
+                }
+                index = text.index(after: index)
+                continue
+            }
+
             let char = text[index]
             if terminators.contains(char) {
                 // Look ahead for whitespace — required so we don't split

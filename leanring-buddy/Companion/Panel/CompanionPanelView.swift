@@ -330,25 +330,31 @@ struct CompanionPanelView: View {
     private var guidedActionPreviewSection: some View {
         if let proposal = companionManager.guidedActionProposal {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .fill(companionManager.selectedCursorColor.displayColor.opacity(0.16))
                             .frame(width: 28, height: 28)
-                        Image(systemName: "cursorarrow.click")
+                        Image(systemName: proposal.isMultiStep ? "wand.and.stars" : "cursorarrow.click")
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(companionManager.selectedCursorColor.displayColor)
                     }
 
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(proposal.instruction)
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(DS.Colors.textPrimary)
-                            .lineLimit(1)
-                        Text("Confirm before Milo clicks.")
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(guidedActionSubtitle(for: proposal))
                             .font(.system(size: 10))
                             .foregroundColor(DS.Colors.textTertiary)
                             .lineLimit(1)
+
+                        if let action = proposal.multiStepAction {
+                            guidedActionStepList(action: action)
+                                .padding(.top, 4)
+                        }
                     }
 
                     Spacer(minLength: 0)
@@ -356,18 +362,20 @@ struct CompanionPanelView: View {
 
                 HStack(spacing: 8) {
                     guidedActionButton(
-                        label: "Click",
-                        icon: "cursorarrow.click",
+                        label: proposal.isMultiStep ? "Run" : "Click",
+                        icon: proposal.isMultiStep ? "play.fill" : "cursorarrow.click",
                         isPrimary: true,
                         action: { companionManager.performGuidedActionClick() }
                     )
 
-                    guidedActionButton(
-                        label: "Show target",
-                        icon: "scope",
-                        isPrimary: false,
-                        action: { companionManager.replayGuidedActionTarget() }
-                    )
+                    if proposal.targetScreenLocation != nil {
+                        guidedActionButton(
+                            label: "Show target",
+                            icon: "scope",
+                            isPrimary: false,
+                            action: { companionManager.replayGuidedActionTarget() }
+                        )
+                    }
 
                     guidedActionButton(
                         label: "Cancel",
@@ -387,6 +395,79 @@ struct CompanionPanelView: View {
                 RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
                     .stroke(companionManager.selectedCursorColor.displayColor.opacity(0.28), lineWidth: 0.7)
             )
+        }
+    }
+
+    /// Short copy under the headline. Single-step still uses the original
+    /// "Confirm before Milo clicks." phrasing; multi-step shows the verb
+    /// count so the user knows whether they're about to fire a one-liner
+    /// or a multi-step chain.
+    private func guidedActionSubtitle(for proposal: GuidedActionProposal) -> String {
+        if let action = proposal.multiStepAction {
+            let count = action.steps.count
+            return count == 1
+                ? "1 step — confirm before Milo runs."
+                : "\(count) steps — confirm before Milo runs."
+        }
+        return "Confirm before Milo clicks."
+    }
+
+    /// One-line-per-step preview using the same verb→human-readable
+    /// mapping Claude itself would write. Limited to 4 visible lines so a
+    /// long sequence doesn't blow up the panel.
+    @ViewBuilder
+    private func guidedActionStepList(action: MiloAction) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(action.steps.prefix(4).enumerated()), id: \.offset) { index, step in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("\(index + 1).")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundColor(DS.Colors.textTertiary)
+                    Text(guidedActionStepDescription(step))
+                        .font(.system(size: 10))
+                        .foregroundColor(DS.Colors.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+            if action.steps.count > 4 {
+                Text("…and \(action.steps.count - 4) more")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(DS.Colors.textTertiary)
+            }
+        }
+    }
+
+    /// Renders one action step as a human-readable line. Kept conservative:
+    /// the user is about to confirm the action, so the description must
+    /// reflect what will actually happen.
+    private func guidedActionStepDescription(_ step: MiloActionStep) -> String {
+        switch step {
+        case let .point(_, _, _, label):
+            return "Point at \(label)"
+        case let .click(_, _, _, label):
+            return "Click \(label)"
+        case let .type(text):
+            let truncated = text.count > 40 ? String(text.prefix(40)) + "…" : text
+            return "Type \u{201C}\(truncated)\u{201D}"
+        case let .keypress(key, modifiers):
+            let mods = modifiers.map(modifierGlyph).joined()
+            let keyDisplay = key.count == 1 ? key.uppercased() : key
+            return "Press \(mods)\(keyDisplay)"
+        case let .scroll(_, _, _, deltaX, deltaY):
+            let directionY = deltaY > 0 ? "down" : (deltaY < 0 ? "up" : nil)
+            let directionX = deltaX > 0 ? "right" : (deltaX < 0 ? "left" : nil)
+            let parts = [directionY, directionX].compactMap { $0 }
+            return parts.isEmpty ? "Scroll" : "Scroll " + parts.joined(separator: "/")
+        }
+    }
+
+    private func modifierGlyph(_ modifier: MiloActionStep.Modifier) -> String {
+        switch modifier {
+        case .cmd: return "\u{2318}"      // ⌘
+        case .shift: return "\u{21E7}"    // ⇧
+        case .option: return "\u{2325}"   // ⌥
+        case .control: return "\u{2303}"  // ⌃
+        case .fn: return "fn "
         }
     }
 

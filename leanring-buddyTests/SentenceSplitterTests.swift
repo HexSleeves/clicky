@@ -132,4 +132,40 @@ struct SentenceSplitterTests {
         let emitted = splitter.consume("First sentence.\nSecond sentence.\n")
         #expect(emitted == ["First sentence.", "Second sentence."])
     }
+
+    // MARK: - [ACTION:{...}] tag suppression
+
+    @Test func terminatorInsideActionTagPayloadDoesNotSplit() {
+        // The JSON payload of an [ACTION:...] tag routinely contains
+        // sentence terminators (e.g. "text":"on my way!"). The splitter
+        // must hold the entire tag together so it can be stripped at
+        // flush time instead of leaking JSON fragments into TTS.
+        let splitter = SentenceSplitter()
+        let response = #"""
+        Sending now. [ACTION:{"steps":[{"verb":"type","text":"on my way!"}],"confirm":"reply"}]
+        """#
+        let emitted = splitter.consume(response)
+        #expect(emitted == ["Sending now."])
+        // The full action tag remains in the buffer until end-of-stream.
+        let remainder = splitter.flushRemainder()
+        #expect(remainder?.contains("[ACTION:") == true)
+        #expect(remainder?.hasSuffix("]") == true)
+    }
+
+    @Test func closingBracketInsideActionStringDoesNotExitSuppression() {
+        // A `]` inside a JSON string (e.g. typing "array[0]") must NOT
+        // be treated as the outer closing bracket — string state has to
+        // be tracked correctly.
+        let splitter = SentenceSplitter()
+        let response = #"""
+        Typing. [ACTION:{"steps":[{"verb":"type","text":"array[0]. extra. "}],"confirm":"x"}]
+        """#
+        let emitted = splitter.consume(response)
+        // Only the spoken prefix should emit; everything from `[ACTION:`
+        // onward stays buffered.
+        #expect(emitted == ["Typing."])
+        let remainder = splitter.flushRemainder()
+        #expect(remainder?.contains("array[0]") == true)
+        #expect(remainder?.hasSuffix("]") == true)
+    }
 }

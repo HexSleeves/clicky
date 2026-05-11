@@ -24,7 +24,14 @@ enum CompanionVoiceState {
 
 struct GuidedActionProposal: Identifiable, Equatable {
     enum ActionType: Equatable {
+        /// Legacy single-click target parsed from a `[POINT:x,y:label]` tag.
+        /// Auto-bypassable when the user has the setting on.
         case clickTarget
+        /// Multi-step sequence parsed from a `[ACTION:{...}]` tag. May
+        /// include type/keypress/scroll steps. Always requires confirmation
+        /// unless `MiloAction.isSafeForAutoBypass` is also true (single-step
+        /// click/point only).
+        case multiStep(MiloAction)
     }
 
     enum State: Equatable {
@@ -37,12 +44,30 @@ struct GuidedActionProposal: Identifiable, Equatable {
 
     let id = UUID()
     let actionType: ActionType
-    let targetScreenLocation: CGPoint
-    let targetDisplayFrame: CGRect
+    /// Anchor for the cursor preview flight. For `.clickTarget` this is the
+    /// click target. For `.multiStep` this is the first visual step's
+    /// resolved location (click/scroll/point) — or `nil` if the sequence
+    /// has no on-screen anchor (e.g. a pure ⌘S keypress).
+    let targetScreenLocation: CGPoint?
+    let targetDisplayFrame: CGRect?
     let targetLabel: String
     let instruction: String
     let screenNumber: Int?
     var state: State = .proposed
+
+    /// Convenience: true when this proposal is a multi-step action that
+    /// requires the executor rather than a single-click postLeftMouseClick.
+    var isMultiStep: Bool {
+        if case .multiStep = actionType { return true }
+        return false
+    }
+
+    /// Convenience: the embedded `MiloAction` if this is a multi-step
+    /// proposal, nil otherwise.
+    var multiStepAction: MiloAction? {
+        if case let .multiStep(action) = actionType { return action }
+        return nil
+    }
 }
 
 @MainActor
@@ -159,6 +184,12 @@ final class CompanionManager: ObservableObject {
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
     private var currentResponseTask: Task<Void, Never>?
+
+    /// Screen captures from the most recent Claude response. Stashed so the
+    /// guided-action executor can resolve per-step `screen` indices to
+    /// AppKit-global coordinates when the user confirms a multi-step
+    /// `[ACTION:...]` sequence. Cleared when the proposal is dismissed.
+    private var lastGuidedActionScreenCaptures: [CompanionScreenCapture] = []
 
     private var shortcutTransitionCancellable: AnyCancellable?
     private var typeToTalkShortcutTransitionCancellable: AnyCancellable?
@@ -392,8 +423,14 @@ final class CompanionManager: ObservableObject {
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 50_000_000)
             guard let self else { return }
-            self.detectedElementScreenLocation = guidedActionProposal.targetScreenLocation
-            self.detectedElementDisplayFrame = guidedActionProposal.targetDisplayFrame
+            // Multi-step actions without an on-screen anchor (e.g. pure ⌘S)
+            // leave the cursor where it is rather than flying it to a
+            // sentinel location.
+            if let anchor = guidedActionProposal.targetScreenLocation,
+               let displayFrame = guidedActionProposal.targetDisplayFrame {
+                self.detectedElementScreenLocation = anchor
+                self.detectedElementDisplayFrame = displayFrame
+            }
         }
     }
 
@@ -402,6 +439,7 @@ final class CompanionManager: ObservableObject {
         guidedActionProposal?.state = .completedByUser
         MiloAnalytics.trackGuidedActionDone()
         self.guidedActionProposal = nil
+        self.lastGuidedActionScreenCaptures = []
         clearDetectedElementLocation()
     }
 
@@ -419,13 +457,26 @@ final class CompanionManager: ObservableObject {
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 180_000_000)
             guard let self else { return }
-            Self.postLeftMouseClick(
-                at: guidedActionProposal.targetScreenLocation,
-                on: guidedActionProposal.targetDisplayFrame
-            )
+            switch guidedActionProposal.actionType {
+            case .clickTarget:
+                if let location = guidedActionProposal.targetScreenLocation,
+                   let displayFrame = guidedActionProposal.targetDisplayFrame {
+                    Self.postLeftMouseClick(at: location, on: displayFrame)
+                }
+            case .multiStep(let action):
+                let captures = self.lastGuidedActionScreenCaptures
+                await MiloActionExecutor.execute(action) { screenshotPoint, screenNumber in
+                    Self.resolveScreenshotCoordinate(
+                        screenshotPoint: screenshotPoint,
+                        screenNumber: screenNumber,
+                        screenCaptures: captures
+                    )
+                }
+            }
             guidedActionProposal.state = .completedByMilo
             MiloAnalytics.trackGuidedActionClicked()
             self.guidedActionProposal = nil
+            self.lastGuidedActionScreenCaptures = []
             self.clearDetectedElementLocation()
         }
     }
@@ -435,6 +486,7 @@ final class CompanionManager: ObservableObject {
         guidedActionProposal?.state = .cancelled
         MiloAnalytics.trackGuidedActionCancelled()
         self.guidedActionProposal = nil
+        self.lastGuidedActionScreenCaptures = []
         clearDetectedElementLocation()
     }
 
@@ -945,25 +997,40 @@ final class CompanionManager: ObservableObject {
                 guard !Task.isCancelled else { return }
 
                 // End-of-stream: flush the remainder (which likely contains
-                // any trailing `[POINT:...]` tag glued to the last sentence).
-                // Strip the tag, enqueue the residual spoken text if non-empty.
+                // any trailing `[POINT:...]` or `[ACTION:{...}]` tag glued to
+                // the last sentence). Strip whichever tag is present, enqueue
+                // the residual spoken text if non-empty.
                 if let remainder = sentenceSplitter.flushRemainder() {
-                    let trailing = PointTagParser.parse(remainder).spokenText
+                    let trailing = stripTrailingActionOrPointTag(remainder)
                     enqueueSentenceForTTSIfSpeakable(trailing)
                 }
 
-                // Parse the [POINT:...] tag from Claude's response
-                let parseResult = PointTagParser.parse(fullResponseText)
-                let spokenText = parseResult.spokenText
+                // Try the new [ACTION:{...}] grammar first; fall back to the
+                // legacy [POINT:...] tag if no action was parsed. Both
+                // formats coexist so older prompt iterations or Claude
+                // responses that reverted to the simpler form still work.
+                let actionParseResult = MiloActionParser.parse(fullResponseText)
+                let spokenText: String
 
-                // Handle element pointing if Claude returned coordinates.
-                // Switch to idle BEFORE setting the location so the triangle
-                // becomes visible and can fly to the target. Without this, the
-                // spinner hides the triangle and the flight animation is invisible.
-                let hasPointCoordinate = parseResult.coordinate != nil
-                if hasPointCoordinate {
-                    voiceState = .idle
-                }
+                if let action = actionParseResult.action {
+                    spokenText = actionParseResult.spokenText
+                    handleParsedAction(
+                        action,
+                        screenCaptures: screenCaptures
+                    )
+                } else {
+                    // Parse the [POINT:...] tag from Claude's response
+                    let parseResult = PointTagParser.parse(fullResponseText)
+                    spokenText = parseResult.spokenText
+
+                    // Handle element pointing if Claude returned coordinates.
+                    // Switch to idle BEFORE setting the location so the triangle
+                    // becomes visible and can fly to the target. Without this, the
+                    // spinner hides the triangle and the flight animation is invisible.
+                    let hasPointCoordinate = parseResult.coordinate != nil
+                    if hasPointCoordinate {
+                        voiceState = .idle
+                    }
 
                 // Pick the screen capture matching Claude's screen number,
                 // falling back to the cursor screen if not specified.
@@ -1021,21 +1088,14 @@ final class CompanionManager: ObservableObject {
                 } else {
                     print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
                 }
+                } // end of `else` (legacy [POINT:...] branch)
 
-                // Save this exchange to conversation history (with the point tag
-                // stripped so it doesn't confuse future context)
-                conversationHistory.append(ConversationExchange(
-                    userTranscript: transcript,
-                    assistantResponse: spokenText,
-                    createdAt: Date()
-                ))
-
-                // Keep only the last 10 exchanges to avoid unbounded context growth
-                if conversationHistory.count > 10 {
-                    conversationHistory.removeFirst(conversationHistory.count - 10)
-                }
-
-                print("🧠 Conversation history: \(conversationHistory.count) exchanges")
+                // Save this exchange to conversation history (with the trailing
+                // tag stripped so it doesn't confuse future context)
+                appendConversationHistory(
+                    transcript: transcript,
+                    assistantResponse: spokenText
+                )
 
                 MiloAnalytics.trackAIResponseReceived(response: spokenText)
                 incrementMonthlyAgentMessageCount()
@@ -1106,19 +1166,166 @@ final class CompanionManager: ObservableObject {
     }
 
     /// Enqueues a single sentence into the streaming TTS queue, after a
-    /// defensive [POINT:...] strip in case Claude sneaks a tag mid-response
-    /// (the system prompt forbids this but the parser is permissive).
-    /// Empty inputs are dropped — speaking "" returns an unhelpful audio
-    /// blip and wastes a quota unit.
+    /// defensive strip of any trailing tags ([POINT:...] or [ACTION:{...}])
+    /// in case Claude sneaks a tag mid-response (the system prompt forbids
+    /// this but the parsers are permissive). Empty inputs are dropped —
+    /// speaking "" returns an unhelpful audio blip and wastes a quota unit.
     private func enqueueSentenceForTTSIfSpeakable(_ sentence: String) {
-        let cleaned = PointTagParser.parse(sentence).spokenText
+        let cleaned = stripTrailingActionOrPointTag(sentence)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return }
         speechPipeline.enqueueSpeak(cleaned)
     }
 
+    /// Strips a trailing [ACTION:{...}] or [POINT:...] tag from a text
+    /// fragment, whichever is present. Returns the spoken-text remainder.
+    /// Used during streaming TTS (mid-stream tag scrub) and end-of-stream
+    /// flush (so the residual sentence with the tag glued on still plays
+    /// audibly clean).
+    private func stripTrailingActionOrPointTag(_ text: String) -> String {
+        // MiloActionParser runs first because [ACTION:{...}] contains
+        // brace-balanced JSON that the simpler PointTagParser regex can't
+        // reason about. If no ACTION tag is present, fall through to the
+        // POINT tag stripper.
+        let actionResult = MiloActionParser.parse(text)
+        if actionResult.action != nil
+            || actionResult.spokenText != text.trimmingCharacters(in: .whitespacesAndNewlines) {
+            return actionResult.spokenText
+        }
+        return PointTagParser.parse(text).spokenText
+    }
+
+    /// Appends a transcript→response pair to the conversation history and
+    /// trims the oldest entries past the 10-exchange cap. Extracted so the
+    /// action-grammar path and the legacy point-tag path don't drift.
+    private func appendConversationHistory(transcript: String, assistantResponse: String) {
+        conversationHistory.append(ConversationExchange(
+            userTranscript: transcript,
+            assistantResponse: assistantResponse,
+            createdAt: Date()
+        ))
+        if conversationHistory.count > 10 {
+            conversationHistory.removeFirst(conversationHistory.count - 10)
+        }
+        print("🧠 Conversation history: \(conversationHistory.count) exchanges")
+    }
+
+    /// Builds a multi-step `GuidedActionProposal` from a parsed `MiloAction`,
+    /// stashes the screen captures for later coordinate resolution, and
+    /// auto-fires if the bypass setting allows it (only single-step safe
+    /// actions auto-fire — typing, hotkeys, or multi-step sequences always
+    /// require explicit confirmation).
+    private func handleParsedAction(
+        _ action: MiloAction,
+        screenCaptures: [CompanionScreenCapture]
+    ) {
+        // Stash captures so MiloActionExecutor's per-step coordinate
+        // resolver can translate screenshot → AppKit-global at confirm
+        // time. Cleared in performGuidedActionClick / cancel / done.
+        self.lastGuidedActionScreenCaptures = screenCaptures
+
+        // Find the first step that has on-screen coordinates so the
+        // preview can fly the cursor to it. Pure ⌘S keypress sequences,
+        // etc., simply skip the cursor flight.
+        let visualAnchor = firstVisualAnchor(
+            in: action,
+            screenCaptures: screenCaptures
+        )
+
+        if let anchor = visualAnchor {
+            // Switch to idle BEFORE setting the location so the triangle
+            // becomes visible and can fly to the anchor.
+            voiceState = .idle
+            detectedElementScreenLocation = anchor.globalLocation
+            detectedElementDisplayFrame = anchor.displayFrame
+        }
+
+        let instruction = action.confirm.isEmpty ? "Perform action" : action.confirm
+        let proposal = GuidedActionProposal(
+            actionType: .multiStep(action),
+            targetScreenLocation: visualAnchor?.globalLocation,
+            targetDisplayFrame: visualAnchor?.displayFrame,
+            targetLabel: action.confirm,
+            instruction: instruction,
+            screenNumber: visualAnchor?.screenNumber
+        )
+        guidedActionProposal = proposal
+        detectedElementBubbleText = proposal.instruction
+        MiloAnalytics.trackGuidedActionProposed()
+
+        print("🎯 Multi-step action proposed: \(action.steps.count) step(s) — \"\(action.confirm)\"")
+
+        if isGuidedActionBypassEnabled && action.isSafeForAutoBypass {
+            performGuidedActionClick()
+        } else {
+            NotificationCenter.default.post(name: .miloShowPanel, object: nil)
+        }
+    }
+
+    /// Finds the first step in an action with an on-screen coordinate
+    /// (point/click/scroll) and resolves it against the screen captures.
+    /// Returns nil for keypress/type-only sequences.
+    private func firstVisualAnchor(
+        in action: MiloAction,
+        screenCaptures: [CompanionScreenCapture]
+    ) -> (globalLocation: CGPoint, displayFrame: CGRect, screenNumber: Int?)? {
+        for step in action.steps {
+            let coordinate: (x: Int, y: Int, screen: Int?)?
+            switch step {
+            case let .point(x, y, screen, _),
+                 let .click(x, y, screen, _),
+                 let .scroll(x, y, screen, _, _):
+                coordinate = (x, y, screen)
+            case .type, .keypress:
+                coordinate = nil
+            }
+            guard let coord = coordinate else { continue }
+            if let resolved = Self.resolveScreenshotCoordinate(
+                screenshotPoint: CGPoint(x: coord.x, y: coord.y),
+                screenNumber: coord.screen,
+                screenCaptures: screenCaptures
+            ) {
+                return (resolved.globalLocation, resolved.displayFrame, coord.screen)
+            }
+        }
+        return nil
+    }
+
 
     // MARK: - Point Tag Parsing
+
+    /// Resolves an in-screenshot coordinate (the space Claude emits in action
+    /// steps) to AppKit-global coordinates plus the matching display frame.
+    /// Returns nil if no matching screen capture is available. Used by the
+    /// MiloActionExecutor to translate per-step coordinates at confirm time.
+    private static func resolveScreenshotCoordinate(
+        screenshotPoint: CGPoint,
+        screenNumber: Int?,
+        screenCaptures: [CompanionScreenCapture]
+    ) -> (globalLocation: CGPoint, displayFrame: CGRect)? {
+        let targetCapture: CompanionScreenCapture? = {
+            if let screenNumber, screenNumber >= 1 && screenNumber <= screenCaptures.count {
+                return screenCaptures[screenNumber - 1]
+            }
+            return screenCaptures.first(where: { $0.isCursorScreen }) ?? screenCaptures.first
+        }()
+
+        guard let capture = targetCapture else { return nil }
+
+        let globalLocation = CoordinateTranslator.screenshotPointToAppKitGlobal(
+            screenshotPoint: screenshotPoint,
+            screenshotSize: CGSize(
+                width: CGFloat(capture.screenshotWidthInPixels),
+                height: CGFloat(capture.screenshotHeightInPixels)
+            ),
+            displaySize: CGSize(
+                width: CGFloat(capture.displayWidthInPoints),
+                height: CGFloat(capture.displayHeightInPoints)
+            ),
+            displayFrame: capture.displayFrame
+        )
+        return (globalLocation, capture.displayFrame)
+    }
 
     private static func postLeftMouseClick(at appKitScreenLocation: CGPoint, on displayFrame: CGRect) {
         let quartzEventLocation = CGPoint(
